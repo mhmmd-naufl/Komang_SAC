@@ -1,36 +1,26 @@
-import { useEffect, useRef, useState } from 'react'
-import { LogOut, ShieldAlert, X } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { LogOut, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { cn } from '../utils/helpers'
 
 /**
- * Konfirmasi logout.
+ * Konfirmasi logout untuk semua peran.
  *
- * Untuk admin dan teknisi: harus mengetik KELUAR. Alasannya praktis, bukan
- * sandera -- HP dipakai bareng di outlet, dan logout tidak sengaja berarti
- * pekerjaan yang sedang jalan hilang dari layar orang berikutnya.
+ * Sengaja sederhana: tombol "Batal" dan "Keluar", tanpa mengetik kata
+ * sandera. Alasannya praktis -- HP dipakai bareng di outlet, jadi yang perlu
+ * dicegah adalah logout tidak sengaja, dan itu sudah tertangani oleh dialog
+ * konfirmasi. Menu di HP tidak bisa terklik tanpa sengaja.
  *
- * Konsumen dan drop point cukup menekan tombol, karena tidak memegang data
- * sensitif di perangkatnya.
+ * Tekan Escape atau klik area gelap untuk batal.
  */
-
-const KATA_KONFIRMASI = 'KELUAR'
-const PERAN_KETAT = ['admin', 'technician']
 
 export default function LogoutConfirm({ open, onClose }) {
   const { user, logout } = useAuth()
-  const [teks, setTeks] = useState('')
-  const inputRef = useRef(null)
-
-  const ketat = PERAN_KETAT.includes(user?.role)
+  const tombolKeluarRef = useRef(null)
 
   useEffect(() => {
-    if (!open) {
-      setTeks('')
-      return undefined
-    }
-    // Fokuskan input supaya bisa langsung mengetik (biar tidak perlu klik dulu).
-    const t = setTimeout(() => inputRef.current?.focus(), 60)
+    if (!open) return undefined
+    // Fokuskan tombol utama supaya Enter langsung jalan tanpa perlu klik dulu.
+    const t = setTimeout(() => tombolKeluarRef.current?.focus(), 60)
     const onKey = (e) => {
       if (e.key === 'Escape') onClose()
     }
@@ -43,10 +33,7 @@ export default function LogoutConfirm({ open, onClose }) {
 
   if (!open) return null
 
-  const boleh = !ketat || teks.trim().toUpperCase() === KATA_KONFIRMASI
-
   const konfirmasi = () => {
-    if (!boleh) return
     onClose()
     logout()
   }
@@ -73,17 +60,8 @@ export default function LogoutConfirm({ open, onClose }) {
         </button>
 
         <div className="p-6">
-          <div
-            className={cn(
-              'h-12 w-12 rounded-2xl flex items-center justify-center mb-4',
-              ketat ? 'bg-rose-50' : 'bg-slate-100'
-            )}
-          >
-            {ketat ? (
-              <ShieldAlert className="h-6 w-6 text-rose-600" />
-            ) : (
-              <LogOut className="h-6 w-6 text-slate-600" />
-            )}
+          <div className="h-12 w-12 rounded-2xl flex items-center justify-center mb-4 bg-primary-50">
+            <LogOut className="h-6 w-6 text-primary-600" />
           </div>
 
           <h3 id="logout-judul" className="text-lg font-bold text-slate-900">
@@ -91,58 +69,21 @@ export default function LogoutConfirm({ open, onClose }) {
           </h3>
 
           <p className="text-sm text-slate-600 mt-2">
-            Kamu masuk sebagai <span className="font-medium text-slate-800">{user?.full_name}</span>
-            {' '}({user?.phone}). Kalau HP ini dipakai bersama, pastikan tidak ada pekerjaan
-            yang belum disimpan.
+            Kamu masuk sebagai{' '}
+            <span className="font-medium text-slate-800">{user?.full_name}</span>
+            {user?.phone ? ` (${user.phone})` : ''}. Kalau HP ini dipakai bareng,
+            pastikan tidak ada pekerjaan yang belum disimpan.
           </p>
-
-          {ketat && (
-            <div className="mt-5">
-              <label htmlFor="logout-konfirmasi" className="label">
-                Ketik <span className="font-bold text-rose-600">{KATA_KONFIRMASI}</span> untuk melanjutkan
-              </label>
-              <input
-                id="logout-konfirmasi"
-                ref={inputRef}
-                type="text"
-                value={teks}
-                onChange={(e) => setTeks(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && konfirmasi()}
-                className={cn(
-                  'input font-medium',
-                  teks.length > 0 && !boleh && 'input-error'
-                )}
-                placeholder={KATA_KONFIRMASI}
-                autoComplete="off"
-                autoCapitalize="characters"
-              />
-              {teks.length > 0 && !boleh && (
-                <p className="text-xs text-rose-600 mt-1.5">
-                  Tulis persis {KATA_KONFIRMASI} (huruf besar).
-                </p>
-              )}
-            </div>
-          )}
 
           <div className="mt-6 flex gap-3">
             <button onClick={onClose} className="btn-secondary flex-1">
-              Batal, tetap di sini
+              Batal
             </button>
-            <button
-              onClick={konfirmasi}
-              disabled={!boleh}
-              className={cn('flex-1', ketat ? 'btn-danger' : 'btn-primary')}
-            >
+            <button ref={tombolKeluarRef} onClick={konfirmasi} className="btn-danger flex-1">
               <LogOut className="h-4 w-4" />
               Keluar
             </button>
           </div>
-
-          {ketat && (
-            <p className="text-[11px] text-slate-500 mt-4 text-center">
-              Verifikasi ekstra ini hanya untuk admin dan teknisi.
-            </p>
-          )}
         </div>
       </div>
     </div>

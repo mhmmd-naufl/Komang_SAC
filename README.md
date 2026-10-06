@@ -37,10 +37,15 @@ requirements.txt      Dependency Python
 frontend/             React + Vite + Tailwind
   src/components/    Navbar, Catalog, BookingModal, StatusTracker, LoginModal,
                      LogoutConfirm, AnalyticsSummary, AdminDashboard,
-                     TeknisiPage, DropPointPage, CustomerAccount, Toast
+                     TeknisiPage, DropPointPage, CustomerAccount,
+                     Pagination, AdminUi, Toast
+  src/components/admin/
+                     AdminShoes, AdminTransaksi, AdminStock, AdminUsers
   src/contexts/      AuthContext
-  src/services/      api.js (axios + interceptor)
-  src/utils/         helpers.js (formatRupiah, formatDate, getStatusConfig)
+  src/hooks/         useTabel.js (paginasi + filter + debounce pencarian)
+  src/services/      api.js (axios + interceptor + ambilBerpaginan)
+  src/utils/         helpers.js (formatRupiah, formatDate, getStatusConfig),
+                     csv.js (ekspor CSV + ambil semua hasil filter)
 
 blueprint.md          Stack, pola skema, design token
 prd.md                Spesifikasi fitur per role
@@ -244,7 +249,7 @@ Script yang tersedia:
 | POST         | `/api/auth/login`                | —             | Login, dapat token JWT                                         |
 | GET          | `/api/auth/me`                   | JWT           | Profil user aktif                                              |
 | POST         | `/api/auth/set-password`         | JWT           | Set/ganti password                                             |
-| GET          | `/api/sepatu`                    | —             | Katalog harga publik (`aktif_only=true` by default)            |
+| GET          | `/api/sepatu`                    | —             | Katalog harga publik. `?aktif_only=false` melihat nonaktif     |
 | GET          | `/api/sepatu/{id}`               | —             | Detail satu layanan                                            |
 | GET          | `/api/drop-points`               | —             | Lokasi mitra publik                                             |
 | GET          | `/api/drop-points/{id}`          | —             | Detail satu mitra                                              |
@@ -256,7 +261,7 @@ Script yang tersedia:
 | GET          | `/api/stats/admin`               | admin         | Agregat dashboard                                              |
 | GET          | `/api/analytics/summary`         | admin         | Ringkasan AI + angka agregat (fallback otomatis)               |
 | POST/PUT/    | `/api/sepatu`                    | admin         | Kelola master layanan & harga                                  |
-| DELETE       | `/api/sepatu/{id}`               | admin         | Hapus layanan                                                  |
+| DELETE       | `/api/sepatu/{id}`               | admin         | Hapus layanan. 409 kalau masih dipakai transaksi                |
 | GET          | `/api/stock`                     | admin/teknisi | `?low_stock=true` untuk item menipis                            |
 | GET          | `/api/stock/{id}`                | admin/teknisi | Detail item stok                                               |
 | POST/PUT     | `/api/stock`                     | admin         | Tambah/ubah stok                                               |
@@ -285,6 +290,67 @@ bisa dibaca meski lewat DevTools:
 | teknisi | `customer` (nama + nomor) | Daftar telepon pelanggan tidak boleh ada di perangkat teknisi |
 | konsumen | `customer` | Itu datanya sendiri, tidak ada gunanya dikirim ulang |
 | drop point | — | Melihat seluruh transaksi memang tugasnya, termasuk kontak untuk mengabari |
+
+Penaringan ini berlaku di **semua** endpoint yang mengembalikan transaksi,
+termasuk `PUT /api/transaksi/{id}/status` — bukan hanya di daftar dan detail.
+Kalau ada satu endpoint yang lupa, teknisi bisa membaca komisi dari panel
+Network di DevTools.
+
+---
+
+## Paginasi
+
+Empat halaman admin (Sepatu, Transaksi, Stok, Pengguna) memakai format yang
+sama:
+
+| Parameter | Arti |
+|---|---|
+| `page` | Nomor halaman, mulai dari 1 |
+| `per_page` | Jumlah baris per halaman, maks 200 |
+| `q` | Pencarian teks (lihat tabel di bawah) |
+
+Respons tetap berupa **JSON list biasa**, supaya katalog publik dan halaman
+status tidak ikut berubah. Jumlah total dikirim di header HTTP:
+
+| Header | Isi |
+|---|---|
+| `X-Total-Count` | Total baris hasil filter |
+| `X-Total-Pages` | Jumlah halaman |
+| `X-Page` | Halaman yang benar-benar disajikan |
+| `X-Per-Page` | Baris per halaman yang dipakai |
+
+Dua hal penting soal ini:
+
+- **Halaman di-clamp.** Kalau `page` di luar jangkauan, backend mengembalikan
+  halaman terakhir yang valid (bukan error). PostgREST melempar
+  `PGRST103` kalau offset melewati jumlah baris; tanpa clamp, admin yang
+  sedang di halaman 5 lalu_LOW_ tanpa sengaja akan membuat seluruh panel error.
+- **Nilai kosong dibuang.** `?q=&status=` tidak pernah dikirim, supaya
+  `q` berisi spasi tidak ikut Zer폭 search sia-sia.
+
+`expose_headers` di `main.py` wajib diisi agar browser bisa membaca header
+tersebut dari JavaScript. Tanpa itu, server mengirimnya tapi JavaScript tetap
+melihat `undefined`.
+
+| Endpoint | `q` mencari di |
+|---|---|
+| `/api/sepatu` | `merk`, `model` |
+| `/api/transaksi` | `kode` (nomor tracking) |
+| `/api/stock` | `nama_item` |
+| `/api/users` | `full_name`, `phone` |
+| `/api/drop-points` | `nama`, `alamat` |
+
+Nilai pencarian dibungkus tanda kutip ganda sebelum dikirim ke PostgREST.
+Tanpa itu, mengetik `60 (besar)` merusak logic tree-nya dan seluruh
+permintaan gagal dengan `PGRST100`.
+
+Filter tambahan: `status`, `urut`, `dari`/`sampai` (transaksi), `tipe`,
+`low_stock` (stok), `role` (pengguna), `aktif_only` (sepatu, drop point).
+
+> `low_stock` sengaja difilter lewat daftar id, bukan di Python. Kalau
+> filtering dilakukan setelah data diambil, `X-Total-Count` jadi tidak sinkron
+> dengan isi halaman — panel melaporkan "2 item" padahal ada 8, dan halaman 2
+> tampak kosong padahal masih ada isi.
 
 ---
 

@@ -4,13 +4,14 @@ import hmac
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Callable
 from supabase import create_client, Client
 import jwt
+import math
 from dotenv import load_dotenv
 
 import analytics
@@ -83,6 +84,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Tanpa ini, browser menyembunyikan header paginasi dari JavaScript
+    # meski server mengirimnya. Frontend butuh X-Total-Count untuk merender
+    # tombol "halaman 2".
+    expose_headers=[
+        "X-Total-Count",
+        "X-Total-Pages",
+        "X-Page",
+        "X-Per-Page",
+    ],
 )
 
 security = HTTPBearer(auto_error=False)
@@ -145,6 +155,20 @@ class CustomerContact(BaseModel):
     phone: str
 
 
+class ShoeBrief(BaseModel):
+    """Ringkasan master sepatu yang menempel di transaksi."""
+    id: str
+    merk: str
+    model: Optional[str] = None
+    jenis_treatment: Optional[str] = None
+
+
+class StaffBrief(BaseModel):
+    """Nama teknisi. Tanpa nomor telepon dan tanpa data kontak lain."""
+    id: str
+    full_name: str
+
+
 class TransactionResponse(TransactionBase):
     id: str
     # Nomor tracking yang dilihat konsumen (KS-XXXXXX). Wajib ada di response
@@ -159,6 +183,11 @@ class TransactionResponse(TransactionBase):
     tech_commission: Optional[int] = None
     # Hanya terisi untuk admin dan drop point (lihat _sertakan_kontak).
     customer: Optional[CustomerContact] = None
+    # Nama sepatu dan teknisi, hasil embed PostgREST. Tanpa ini tabel admin
+    # cuma menampilkan UUID yang tidak berguna. Tidak ada data sensitif di
+    # sini, jadi semua peran boleh menerimanya.
+    shoe: Optional[ShoeBrief] = None
+    tech: Optional[StaffBrief] = None
     photo_before: Optional[str] = None
     photo_after: Optional[str] = None
     defect_notes: Optional[str] = None
@@ -419,6 +448,89 @@ def _siapkan_transaksi(baris: list[dict], user: dict) -> list[dict]:
     """Terapkan seluruh aturan bentuk respons sesuai peran pemohon."""
     return _sertakan_kontak(_sembunyikan_biaya(baris, user), user)
 
+
+# ==========================================
+# PAGINASI & PENCARIAN
+# ==========================================
+#
+# Format: response tetap berupa JSON list (supaya tidak membongkar konsumen
+# lama), jumlah total dikirim lewat header X-Total-Count / X-Total-Pages.
+#
+# Endpoint tanpa parameter `page` tetap mengembalikan seluruh baris seperti
+# sebelumnya -- jadi katalog publik, booking, dan halaman status tidak ikut
+# berubah. Hanya halaman admin yang lewat paginasi.
+
+PER_PAGE_DEFAULT = 25
+PER_PAGE_MAKS = 200
+
+HEADER_TOTAL = "X-Total-Count"
+HEADER_HALAMAN = "X-Total-Pages"
+
+
+def _normalisasi_page(page: Optional[int], per_page: Optional[int]) -> tuple[int, int]:
+    """(page, per_page) -> selalu nilai yang aman dipanggilkan ke range()."""
+    p = max(1, page or 1)
+    n = per_page if per_page else PER_PAGE_DEFAULT
+    n = min(max(1, n), PER_PAGE_MAKS)
+    return p, n
+
+
+def _jumlah_baris(bangun_query: Callable[[], object]) -> int:
+    """Total baris hasil filter. Query dibangun ulang supaya tidak ikut
+    terpengaruh limit dari pemakaian sebelumnya."""
+    try:
+        return bangun_query().limit(1).execute().count or 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _halaman_berpaginan(
+    bangun_query: Callable[[], object],
+    page: Optional[int],
+    per_page: Optional[int],
+    response: Response,
+) -> list[dict]:
+    """
+    Jalankan query berpaginasi dan tulis header total ke response.
+
+    Clamp halaman ke total_pages itu WAJIB: PostgREST melempar PGRST103
+    ("Requested range not satisfiable") kalau offset melewati jumlah baris.
+    Kasus nyata: admin sedang di halaman 5, lalu teknisi menghapus transaksi
+    sehingga tersisa 12 baris. Tanpa clamp, dashboard admin ikut error.
+    """
+    p, n = _normalisasi_page(page, per_page)
+    total = _jumlah_baris(bangun_query)
+    total_halaman = max(1, math.ceil(total / n)) if total else 1
+    p = min(p, total_halaman)
+
+    offset = (p - 1) * n
+    result = bangun_query().range(offset, offset + n - 1).execute()
+
+    response.headers[HEADER_TOTAL] = str(total)
+    response.headers[HEADER_HALAMAN] = str(total_halaman)
+    response.headers["X-Page"] = str(p)
+    response.headers["X-Per-Page"] = str(n)
+    return result.data or []
+
+
+def _pola_ilike(kolom: str, teks: str) -> str:
+    """
+    Bangun pola ilike yang aman dari input pengguna.
+
+    Nilainya dibungkus tanda kutip ganda. Tanpa itu, pencarian "a, b" atau
+    "60 (besar)" merusak logic tree PostgREST dan seluruh permintaan gagal
+    dengan PGRST100.
+    """
+    aman = (teks or "").replace("\\", "").replace('"', "").strip()
+    return f'{kolom}.ilike."%{aman}%"'
+
+
+def _cari_teks(teks: Optional[str]) -> Optional[str]:
+    """Normalisasi input pencarian: None kalau kosong atau terlalu pendek."""
+    t = (teks or "").strip()
+    return t if len(t) >= 2 else None
+
+
 # ==========================================
 # ROOT & HEALTH
 # ==========================================
@@ -624,12 +736,38 @@ def create_sepatu(sepatu: ShoeCreate, _: dict = Depends(require_role("admin"))):
         raise HTTPException(500, f"Database error: {str(e)}")
 
 @app.get("/api/sepatu", response_model=List[ShoeResponse], tags=["Sepatu"])
-def list_sepatu(aktif_only: bool = True):
-    query = supabase.from_("shoes").select("*")
-    if aktif_only:
-        query = query.eq("status", True)
-    result = query.order("merk").execute()
-    return result.data
+def list_sepatu(
+    response: Response,
+    aktif_only: bool = True,
+    q: Optional[str] = None,
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
+):
+    """
+    Master sepatu. Tetap publik: daftar harga memang meant dibaca siapa saja,
+    dan endpoint ini sudah terbuka sejak awal.
+
+    `aktif_only` default True supaya katalog publik tidak menampilkan layanan
+    yang dinonaktifkan. Panel admin mengirim `aktif_only=false` supaya bisa
+    melihat dan menghidupkan kembali layanan nonaktif.
+
+    Tanpa `page`, seluruh baris dikembalikan (perilaku lama).
+    """
+    cari = _cari_teks(q)
+
+    def bangun() -> object:
+        query = supabase.from_("shoes").select("*", count="exact")
+        if aktif_only:
+            query = query.eq("status", True)
+        if cari:
+            query = query.or_(
+                ",".join([_pola_ilike("merk", cari), _pola_ilike("model", cari)])
+            )
+        return query.order("merk")
+
+    if page is None:
+        return bangun().execute().data or []
+    return _halaman_berpaginan(bangun, page, per_page, response)
 
 @app.get("/api/sepatu/{sepatu_id}", response_model=ShoeResponse, tags=["Sepatu"])
 def get_sepatu(sepatu_id: str):
@@ -650,9 +788,26 @@ def update_sepatu(sepatu_id: str, sepatu: ShoeUpdate, _: dict = Depends(require_
 
 @app.delete("/api/sepatu/{sepatu_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Sepatu"])
 def delete_sepatu(sepatu_id: str, _: dict = Depends(require_role("admin"))):
-    existing = supabase.from_("shoes").select("id").eq("id", sepatu_id).execute()
+    """
+    Hapus master sepatu.
+
+    Tidak bisa dihapus kalau masih dipakai transaksi: PostgreSQL menolak dengan
+    error foreign key (23503). Itu harus ditulis eksplisit, kalau tidak admin
+    melihat "berhasil" padahal datanya masih ada -- atau malah dapat 500 dengan
+    pesan bahasa Postgres yang tidak ada artinya buat kasir.
+    """
+    existing = supabase.from_("shoes").select("id,merk").eq("id", sepatu_id).execute()
     if not existing.data:
         raise HTTPException(404, "Sepatu tidak ditemukan")
+
+    dipakai = supabase.from_("transactions").select("id").eq("shoe_id", sepatu_id).execute().data or []
+    if dipakai:
+        raise HTTPException(
+            409,
+            f"Master ini masih dipakai {len(dipakai)} transaksi sehingga tidak bisa dihapus. "
+            "Nonaktifkan saja supaya hilang dari katalog tanpa merusak riwayat.",
+        )
+
     supabase.from_("shoes").delete().eq("id", sepatu_id).execute()
     return
 
@@ -707,41 +862,84 @@ def _bisa_lihat(user: dict, trx: dict) -> bool:
 
 @app.get("/api/transaksi", response_model=List[TransactionResponse], tags=["Transaksi"])
 def list_transaksi(
+    response: Response,
     user: dict = Depends(get_current_user),
     status: Optional[str] = None,
     tech_id: Optional[str] = None,
     drop_point_id: Optional[str] = None,
     user_id: Optional[str] = None,
-    limit: int = 50,
+    q: Optional[str] = None,
+    dari: Optional[str] = None,
+    sampai: Optional[str] = None,
+    urut: str = "terbaru",
+    limit: Optional[int] = None,
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
 ):
     """
     Daftar transaksi. Konsumen hanya melihat miliknya sendiri, teknisi hanya
     yang ditugaskan ke dirinya. Filter user_id/tech_id dari query diabaikan
     untuk non-admin supaya tidak bisa dipakai menembak data orang lain.
+
+    `q` mencari di kolom kode (KS-XXXXXX). Pencarian nama pelanggan harus lewat
+    filter user_id, karena PostgREST tidak bisa dicari lewat relasi di or_.
+
+    `urut`: "terbaru" (default), "terlama", "nilai_tinggi", "nilai_rendah".
     """
     if user["role"] not in ("admin", "drop_point"):
         tech_id = None
         user_id = None
 
-    query = supabase.from_("transactions").select("*")
+    cari = _cari_teks(q)
 
-    # Kunci baris ke pemilik
-    if user["role"] == "customer":
-        query = query.eq("user_id", user["id"])
-    elif user["role"] == "technician":
-        query = query.eq("tech_id", user["id"])
+    # Bentuk select: nama sepatu dan teknisi selalu ikut (bukan data sensitif,
+    # dan tanpa itu tabel admin cuma menampilkan UUID yang tidak berguna).
+    # Kontak pelanggan TIDAK ikut lewat embed; itu ditangani terpisah oleh
+    # _sertakan_kontak supaya aturan privasi tetap di satu tempat.
+    kolom = (
+        "*,"
+        "shoe:shoes(id, merk, model, jenis_treatment),"
+        "tech:profiles!transactions_tech_id_fkey(id, full_name)"
+    )
 
-    if status:
-        query = query.eq("status", status)
-    if tech_id:
-        query = query.eq("tech_id", tech_id)
-    if drop_point_id:
-        query = query.eq("drop_point_id", drop_point_id)
-    if user_id:
-        query = query.eq("user_id", user_id)
+    def bangun() -> object:
+        query = supabase.from_("transactions").select(kolom, count="exact")
 
-    result = query.order("created_at", desc=True).limit(limit).execute()
-    return _siapkan_transaksi(result.data or [], user)
+        # Kunci baris ke pemilik
+        if user["role"] == "customer":
+            query = query.eq("user_id", user["id"])
+        elif user["role"] == "technician":
+            query = query.eq("tech_id", user["id"])
+
+        if status:
+            query = query.eq("status", status)
+        if tech_id:
+            query = query.eq("tech_id", tech_id)
+        if drop_point_id:
+            query = query.eq("drop_point_id", drop_point_id)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        if cari:
+            query = query.ilike("kode", f"%{cari}%")
+        if dari:
+            query = query.gte("created_at", dari)
+        if sampai:
+            query = query.lte("created_at", sampai)
+
+        if urut == "terlama":
+            return query.order("created_at")
+        if urut == "nilai_tinggi":
+            return query.order("harga", desc=True).order("created_at", desc=True)
+        if urut == "nilai_rendah":
+            return query.order("harga").order("created_at", desc=True)
+        return query.order("created_at", desc=True)
+
+    if page is None:
+        query = bangun().limit(limit) if limit else bangun()
+        return _siapkan_transaksi(query.execute().data or [], user)
+    return _siapkan_transaksi(
+        _halaman_berpaginan(bangun, page, per_page, response), user
+    )
 
 @app.get("/api/transaksi/{transaksi_id}", response_model=TransactionResponse, tags=["Transaksi"])
 def get_transaksi(transaksi_id: str, user: dict = Depends(get_current_user)):
@@ -823,7 +1021,10 @@ def update_transaksi_status(
     result = supabase.from_("transactions").update(data).eq("id", transaksi_id).execute()
     if not result.data:
         raise HTTPException(404, "Transaksi tidak ditemukan")
-    return result.data[0]
+    # WAJIB lewat _siapkan_transaksi: endpoint ini boleh dipanggil teknisi,
+    # dan baris mentah dari database masih memuat harga serta tech_commission.
+    # Tanpa ini, teknisi membaca commission setiap kali ia update status.
+    return _siapkan_transaksi([result.data[0]], user)[0]
 
 
 # ==========================================
@@ -858,12 +1059,35 @@ def create_user_with_password(payload: ProfileCreate, _: dict = Depends(require_
     return {"detail": "User dibuat. Password sementara = nomor WhatsApp. Minta user segera ganti."}
 
 @app.get("/api/users", response_model=List[ProfileResponse], tags=["Users"])
-def list_users(_: dict = Depends(require_role("admin")), role: Optional[str] = None):
-    query = supabase.from_("profiles").select("*")
-    if role:
-        query = query.eq("role", role)
-    result = query.order("created_at", desc=True).execute()
-    return result.data
+def list_users(
+    response: Response,
+    _: dict = Depends(require_role("admin")),
+    role: Optional[str] = None,
+    q: Optional[str] = None,
+    urut: str = "terbaru",
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
+):
+    """Daftar user. `q` mencari di nama dan nomor WhatsApp."""
+    cari = _cari_teks(q)
+
+    def bangun() -> object:
+        query = supabase.from_("profiles").select("*", count="exact")
+        if role:
+            query = query.eq("role", role)
+        if cari:
+            query = query.or_(
+                ",".join([_pola_ilike("full_name", cari), _pola_ilike("phone", cari)])
+            )
+        if urut == "nama":
+            return query.order("full_name")
+        if urut == "nama_z":
+            return query.order("full_name", desc=True)
+        return query.order("created_at", desc=True)
+
+    if page is None:
+        return bangun().execute().data or []
+    return _halaman_berpaginan(bangun, page, per_page, response)
 
 @app.get("/api/users/{user_id}", response_model=ProfileResponse, tags=["Users"])
 def get_user(user_id: str, _: dict = Depends(require_role("admin"))):
@@ -907,12 +1131,36 @@ def create_drop_point(dp: DropPointCreate, _: dict = Depends(require_role("admin
     return result.data[0]
 
 @app.get("/api/drop-points", response_model=List[DropPointResponse], tags=["Drop Points"])
-def list_drop_points(aktif_only: bool = True):
-    query = supabase.from_("drop_points").select("*")
-    if aktif_only:
-        query = query.eq("aktif", True)
-    result = query.order("nama").execute()
-    return result.data
+def list_drop_points(
+    response: Response,
+    aktif_only: bool = True,
+    q: Optional[str] = None,
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
+):
+    """
+    Daftar mitra / outlet.
+
+    Tetap publik: alamat outlet memang sengaja ditampilkan di halaman depan
+    supaya pelanggan tahu di mana titip. Halaman booking juga memanggil endpoint
+    ini tanpa login, jadi membikinnya butuh token akan membuat halaman depan
+    diam-diam jatuh ke data cadangan.
+    """
+    cari = _cari_teks(q)
+
+    def bangun() -> object:
+        query = supabase.from_("drop_points").select("*", count="exact")
+        if aktif_only:
+            query = query.eq("aktif", True)
+        if cari:
+            query = query.or_(
+                ",".join([_pola_ilike("nama", cari), _pola_ilike("alamat", cari)])
+            )
+        return query.order("nama")
+
+    if page is None:
+        return bangun().execute().data or []
+    return _halaman_berpaginan(bangun, page, per_page, response)
 
 @app.get("/api/drop-points/{dp_id}", response_model=DropPointResponse, tags=["Drop Points"])
 def get_drop_point(dp_id: str):
@@ -947,19 +1195,57 @@ def create_stock(item: StockCreate, _: dict = Depends(require_role("admin"))):
 
 @app.get("/api/stock", response_model=List[StockResponse], tags=["Stock"])
 def list_stock(
+    response: Response,
     _: dict = Depends(require_role("admin", "technician")),
     tipe: Optional[str] = None,
     low_stock: bool = False,
+    q: Optional[str] = None,
+    urut: str = "nama",
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
 ):
-    query = supabase.from_("stock").select("*")
-    if tipe:
-        query = query.eq("tipe", tipe)
-    result = query.order("nama_item").execute()
+    """
+    Daftar stok bahan.
 
-    data = result.data
+    low_stock difilter lewat daftar id, bukan di Python. Kalau filtering
+    post-hoc, total dan paginasi jadi tidak sinkron -- backend melaporkan
+    "hanya 2 item" padahal di database ada 8, dan halaman 2 jadi kosong
+    padahal masih ada isi.
+    """
+    cari = _cari_teks(q)
+
+    id_kritis: Optional[list[str]] = None
     if low_stock:
-        data = [item for item in data if item["jumlah"] <= item["batas_minimum"]]
-    return data
+        semua = (
+            supabase.from_("stock").select("id,jumlah,batas_minimum").execute().data or []
+        )
+        id_kritis = [
+            s["id"] for s in semua if (s.get("jumlah") or 0) <= (s.get("batas_minimum") or 0)
+        ]
+
+    def bangun() -> object:
+        query = supabase.from_("stock").select("*", count="exact")
+        if tipe:
+            query = query.eq("tipe", tipe)
+        if id_kritis is not None:
+            if not id_kritis:
+                # Tidak ada yang kritis. Tetap harus mengembalikan query yang
+                # sah supaya count=0, bukan daftar kosong tanpa total.
+                query = query.in_("id", ["00000000-0000-0000-0000-000000000000"])
+            else:
+                query = query.in_("id", id_kritis)
+        if cari:
+            query = query.ilike("nama_item", f"%{cari}%")
+
+        if urut == "jumlah_terbanyak":
+            return query.order("jumlah", desc=True)
+        if urut == "jumlah_tersedikit":
+            return query.order("jumlah")
+        return query.order("nama_item")
+
+    if page is None:
+        return bangun().execute().data or []
+    return _halaman_berpaginan(bangun, page, per_page, response)
 
 @app.get("/api/stock/{stock_id}", response_model=StockResponse, tags=["Stock"])
 def get_stock(stock_id: str, _: dict = Depends(require_role("admin", "technician"))):

@@ -304,6 +304,161 @@ if tokens.get("admin"):
 
 
 # =============================================================
+section("11. Privasi pada endpoint update status")
+
+# PUT /status sebelumnya mengembalikan baris mentah dari database, jadi
+# teknisi bisa membaca harga & komisi setiap kali ia mengubah status.
+# Endpoint itu harus ikut melewati penyaringan peran seperti endpoint lain.
+trx_semua = main.supabase.from_("transactions").select("id,tech_id").execute().data or []
+# .not_ di postgrest-py adalah properti, bukan method, jadi filter di Python.
+trx_dipakai = [t for t in trx_semua if t.get("tech_id")]
+teknisi_dasar = next((t for t in trx_dipakai if t["tech_id"] == client_tech_id), None)
+
+if teknisi_dasar and tokens.get("technician"):
+    r = client.put(
+        f"/api/transaksi/{teknisi_dasar['id']}/status",
+        headers=tech_h,
+        json={"status": "Diproses"},
+    )
+    if r.status_code == 200:
+        body = r.json()
+        check("update status tidak mengirim harga ke teknisi", body.get("harga") is None, f"harga={body.get('harga')}")
+        check("update status tidak mengirim komisi ke teknisi",
+              body.get("tech_commission") is None, f"komisi={body.get('tech_commission')}")
+    else:
+        # 400/403 juga sah (mis. aturan foto-after atau transaksi bukan tugasnya),
+        # yang penting bukan 200 dengan harga di dalamnya.
+        check("update status oleh teknisi ditolak atau tersaring",
+              r.status_code in (400, 403), f"HTTP {r.status_code}")
+
+if teknisi_dasar and tokens.get("admin"):
+    r = client.put(
+        f"/api/transaksi/{teknisi_dasar['id']}/status",
+        headers=admin_h,
+        json={"status": "Diproses"},
+    )
+    check("admin tetap menerima harga di respons update status",
+          r.status_code == 200 and r.json().get("harga") is not None,
+          f"HTTP {r.status_code} harga={r.json().get('harga') if r.status_code == 200 else '-'}")
+
+
+# =============================================================
+section("12. Paginasi: header dan clamping")
+
+if tokens.get("admin"):
+    r = client.get("/api/transaksi", headers=admin_h, params={"page": 1, "per_page": 5})
+    total = int(r.headers.get("x-total-count", 0))
+    check("X-Total-Count terbaca", total > 0, f"total={total}")
+    check("jumlah baris sesuai per_page", len(r.json()) == 5, f"baris={len(r.json())}")
+    check("X-Total-Pages = ceil(total / per_page)",
+          r.headers.get("x-total-pages") == str(max(1, -(-total // 5))),
+          f"header={r.headers.get('x-total-pages')}")
+
+    # Halaman 1 dan halaman terakhir tidak boleh saling tumpang tindih.
+    per_page = 5
+    jml_halaman = max(1, -(-total // per_page))
+    if jml_halaman > 1:
+        p1 = client.get("/api/transaksi", headers=admin_h, params={"page": 1, "per_page": per_page})
+        p2 = client.get("/api/transaksi", headers=admin_h,
+                        params={"page": jml_halaman, "per_page": per_page})
+        kode1 = {b["id"] for b in p1.json()}
+        kode2 = {b["id"] for b in p2.json()}
+        check("halaman 1 dan halaman terakhir tidak overlap", not (kode1 & kode2),
+              f"irisan={len(kode1 & kode2)}")
+
+    # Halaman jauh: PostgREST melempar PGRST103 kalau offset melewati total.
+    # Backend harus clamp, bukan 500.
+    r = client.get("/api/transaksi", headers=admin_h, params={"page": 999, "per_page": 5})
+    check("halaman di luar jangkauan tidak error", r.status_code == 200, f"HTTP {r.status_code}")
+    check("halaman di-clamp ke nilai valid", r.headers.get("x-page") == str(jml_halaman),
+          f"x-page={r.headers.get('x-page')}")
+
+    # Tanpa parameter page, perilaku lama harus utuh (seluruh baris).
+    r = client.get("/api/transaksi", headers=admin_h)
+    check("tanpa 'page' mengembalikan semua baris (perilaku lama)",
+          len(r.json()) == total, f"baris={len(r.json())} total={total}")
+
+
+# =============================================================
+section("13. Paginasi: pencarian & filter")
+
+if tokens.get("admin"):
+    kode_semua = main.supabase.from_("transactions").select("kode").execute().data or []
+    kode_ada = [k for k in kode_semua if k.get("kode")]
+    if kode_ada:
+        kode = kode_ada[0]["kode"]
+        r = client.get("/api/transaksi", headers=admin_h, params={"q": kode, "page": 1, "per_page": 10})
+        check("cari kode tracking menemukan 1 baris",
+              r.headers.get("x-total-count") == "1", f"count={r.headers.get('x-total-count')}")
+
+    # Karakter yang merusak logic tree PostgREST harus tetap aman.
+    for jahat in ["a, b", "60 (besar)", 'kutip"di', "100%", "a\\b"]:
+        r = client.get("/api/transaksi", headers=admin_h, params={"q": jahat, "page": 1})
+        check(f"pencarian withstand input berbahaya {jahat!r}", r.status_code == 200, f"HTTP {r.status_code}")
+
+    for status in ["Diterima", "Diproses", "Diperiksa", "Selesai", "Siap diambil"]:
+        r = client.get("/api/transaksi", headers=admin_h, params={"status": status, "page": 1, "per_page": 50})
+        benar = r.status_code == 200 and all(b["status"] == status for b in r.json())
+        check(f"filter status {status!r}", benar, f"HTTP {r.status_code}")
+
+    for urut in ["terbaru", "terlama", "nilai_tinggi", "nilai_rendah"]:
+        r = client.get("/api/transaksi", headers=admin_h, params={"urut": urut, "page": 1})
+        check(f"urut {urut!r} jalan", r.status_code == 200 and len(r.json()) > 0, f"HTTP {r.status_code}")
+
+    # Filter low_stock harus sinkron dengan total, kalau tidak paginasinya bohong.
+    semua = client.get("/api/stock", headers=admin_h, params={"page": 1, "per_page": 100})
+    kritis = client.get("/api/stock", headers=admin_h, params={"low_stock": True, "page": 1, "per_page": 100})
+    if kritis.status_code == 200 and semua.status_code == 200:
+        check("low_stock: total = jumlah item kritis",
+              kritis.headers.get("x-total-count") == str(len(kritis.json())),
+              f"count={kritis.headers.get('x-total-count')} baris={len(kritis.json())}")
+        check("low_stock: semua memang menyentuh batas minimum",
+              all(b["jumlah"] <= b["batas_minimum"] for b in kritis.json()))
+
+    r = client.get("/api/users", headers=admin_h, params={"role": "technician", "page": 1, "per_page": 5})
+    check("filter peran pengguna", r.status_code == 200 and all(b["role"] == "technician" for b in r.json()),
+          f"HTTP {r.status_code}")
+
+    # Katalog publik tidak boleh ikut terpaginasikan secara diam-diam.
+    r = client.get("/api/sepatu")
+    check("katalog publik tetap terbuka tanpa token", r.status_code == 200, f"HTTP {r.status_code}")
+    check("katalog publik hanya menampilkan yang aktif",
+          all(b["status"] for b in r.json()), "ada master nonaktif bocor ke publik")
+    r = client.get("/api/sepatu", params={"aktif_only": False, "page": 1, "per_page": 5})
+    check("katalog bisa melihat master nonaktif untuk admin",
+          r.status_code == 200 and r.headers.get("x-total-count") is not None, f"HTTP {r.status_code}")
+
+
+# =============================================================
+section("14. Relasi nama di respons transaksi")
+
+if tokens.get("admin"):
+    r = client.get("/api/transaksi", headers=admin_h, params={"page": 1, "per_page": 50})
+    berteknisi = [b for b in r.json() if b.get("tech_id")]
+    if berteknisi:
+        check("nama teknisi ikut di respons", bool(berteknisi[0].get("tech", {}).get("full_name")),
+              str(berteknisi[0].get("tech")))
+    check("nama sepatu ikut di respons", bool(r.json()[0].get("shoe", {}).get("merk")),
+          str(r.json()[0].get("shoe")))
+
+
+# =============================================================
+section("15. Master sepatu tidak bisa dihapus saat terpakai")
+
+if tokens.get("admin"):
+    terpakai = main.supabase.from_("transactions").select("shoe_id").limit(1).execute().data or []
+    if terpakai:
+        # Foreign key PostgreSQL menolak penghapusan; backend harus
+        # menerjemahkannya jadi 409 yang bisa dibaca, bukan 500.
+        r = client.delete(f"/api/sepatu/{terpakai[0]['shoe_id']}", headers=admin_h)
+        check("hapus master yang terpakai transaksi ditolak dengan 409",
+              r.status_code == 409, f"HTTP {r.status_code}")
+        if r.status_code == 409:
+            check("pesan 409 berbahasa Indonesia yang jelas",
+                  "transaksi" in r.json().get("detail", "").lower(), str(r.json())[:120])
+
+
+# =============================================================
 print("\n" + "=" * 52)
 print(f"HASIL: {passed} lulus, {failed} gagal")
 print("=" * 52)

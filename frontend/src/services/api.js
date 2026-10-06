@@ -98,3 +98,60 @@ export const statsApi = {
 export const analyticsApi = {
   summary: () => api.get('/api/analytics/summary'),
 }
+
+/* ------------------------------------------------------------------ */
+/* PAGINASI                                                           */
+/* ------------------------------------------------------------------ */
+/*
+ * Backend mengembalikan JSON list biasa (supaya konsumen lama tidak bongkar)
+ * dan menaruh jumlah total di header X-Total-Count / X-Total-Pages.
+ * expose_headers di main.py yang membuat header ini terbaca di browser.
+ */
+
+export const HALAMAN_DEFAULT = 25
+export const OPSI_PER_HALAMAN = [10, 25, 50, 100]
+
+const KE_HEADER = {
+  total: 'x-total-count',
+  totalHalaman: 'x-total-pages',
+  halaman: 'x-page',
+  perHalaman: 'x-per-page',
+}
+
+/** Ubah string header jadi number, dengan fallback kalau header tidak ada. */
+function angkaHeader(headers, kunci, fallback) {
+  const mentah = headers?.[KE_HEADER[kunci]]
+  const n = Number.parseInt(mentah, 10)
+  return Number.isFinite(n) ? n : fallback
+}
+
+/**
+ * Panggil endpoint daftar dan kembalikan `{ rows, total, totalHalaman, halaman }`
+ * di samping respons Axios asli (yang tetap dikembalikan sebagai-is, jadi
+ * `res.data` dan `res.headers` tetap bisa dipakai).
+ *
+ * Backend melakukan clamp halaman: kalau `halaman` di luar jangkauan, server
+ * mengirim halaman terakhir yang valid. Nilai itu ikut dikembalikan lewat
+ * `halaman` supaya tombol paginasi ikut lompat ikut benar -- bukan menampilkan
+ * "halaman 99" yang kosong.
+ */
+export async function ambilBerpaginan(path, { halaman = 1, perHalaman = HALAMAN_DEFAULT, ...params } = {}) {
+  const res = await api.get(path, {
+    params: { ...params, page: halaman, per_page: perHalaman },
+  })
+
+  const rows = Array.isArray(res.data) ? res.data : []
+  const perHalamanEfektif = angkaHeader(res.headers, 'perHalaman', perHalaman)
+
+  return Object.assign(res, {
+    rows,
+    total: angkaHeader(res.headers, 'total', rows.length),
+    totalHalaman: angkaHeader(
+      res.headers,
+      'totalHalaman',
+      Math.max(1, Math.ceil(rows.length / perHalamanEfektif)),
+    ),
+    halaman: angkaHeader(res.headers, 'halaman', halaman),
+    perHalaman: perHalamanEfektif,
+  })
+}

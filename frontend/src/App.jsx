@@ -12,6 +12,10 @@ import AnalyticsSummary from './components/AnalyticsSummary'
 import TeknisiPage from './components/TeknisiPage'
 import DropPointPage from './components/DropPointPage'
 import CustomerAccount from './components/CustomerAccount'
+import AdminShoes from './components/admin/AdminShoes'
+import AdminTransaksi from './components/admin/AdminTransaksi'
+import AdminStock from './components/admin/AdminStock'
+import AdminUsers from './components/admin/AdminUsers'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { Toaster } from './components/Toast'
 import { cn } from './utils/helpers'
@@ -222,7 +226,7 @@ function ProtectedRoute({ children, allowedRoles }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Dashboard admin -- bungkus analytics + tabelomzet yang sudah ada     */
+/* Dashboard admin -- bungkus analytics + tabel statistik yang sudah ada */
 /* ------------------------------------------------------------------ */
 
 function AdminHome() {
@@ -410,20 +414,6 @@ function RoleLayout() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Placeholder pages                                                   */
-/* ------------------------------------------------------------------ */
-
-function Placeholder({ title, description }) {
-  return (
-    <div className="card p-8">
-      <h2 className="text-xl font-bold text-slate-900 mb-2">{title}</h2>
-      <p className="text-slate-500">{description}</p>
-      <p className="mt-4 text-sm text-primary-600">Modul sedang dibangun.</p>
-    </div>
-  )
-}
-
-/* ------------------------------------------------------------------ */
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -443,22 +433,10 @@ function AppRoutes() {
         }
       >
         <Route index element={<AdminHome />} />
-        <Route
-          path="sepatu"
-          element={<Placeholder title="Kelola Sepatu" description="CRUD master sepatu, harga, dan jenis treatment." />}
-        />
-        <Route
-          path="transaksi"
-          element={<Placeholder title="Transaksi" description="Monitor dan kelola seluruh transaksi cuci." />}
-        />
-        <Route
-          path="stock"
-          element={<Placeholder title="Stok & Bahan" description="Monitoring stok alat dan bahan cuci." />}
-        />
-        <Route
-          path="users"
-          element={<Placeholder title="Pengguna" description="Kelola admin, teknisi, pelanggan, dan drop point." />}
-        />
+        <Route path="sepatu" element={<AdminShoes />} />
+        <Route path="transaksi" element={<AdminTransaksi />} />
+        <Route path="stock" element={<AdminStock />} />
+        <Route path="users" element={<AdminUsers />} />
       </Route>
 
       {/* Halaman per-role. Semua memakai RoleLayout yang sama; bedanya hanya
