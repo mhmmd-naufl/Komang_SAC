@@ -13,6 +13,8 @@ from supabase import create_client, Client
 import jwt
 from dotenv import load_dotenv
 
+import analytics
+
 # WAJIB: muat .env SEBELUM membaca konfigurasi di bawah.
 # Tanpa ini os.getenv() selalu None dan main.py diam-diam memakai nilai
 # fallback hardcode (termasuk JWT secret yang ada di source code).
@@ -136,10 +138,27 @@ class TransactionStatusUpdate(BaseModel):
     photo_after: Optional[str] = None
     defect_notes: Optional[str] = None
 
+class CustomerContact(BaseModel):
+    """Kontak pelanggan. Hanya dikirim ke admin dan drop point."""
+    id: str
+    full_name: str
+    phone: str
+
+
 class TransactionResponse(TransactionBase):
     id: str
+    # Nomor tracking yang dilihat konsumen (KS-XXXXXX). Wajib ada di response
+    # karena teknisi dan admin butuh menautkannya ke halaman status publik.
+    kode: Optional[str] = None
     status: str
-    tech_commission: int
+    # Opsional karena teknisi TIDAK boleh melihat angka ini: backend menghapus
+    # field-nya sebelum response dibangun (lihat _sembunyikan_biaya), jadi
+    # Pydantic harus siap menerima field yang tidak ada. Aturan bisnis, bukan
+    # preferensi tampilan -- teknisi tidak bisa membacanya lewat DevTools.
+    harga: Optional[int] = None
+    tech_commission: Optional[int] = None
+    # Hanya terisi untuk admin dan drop point (lihat _sertakan_kontak).
+    customer: Optional[CustomerContact] = None
     photo_before: Optional[str] = None
     photo_after: Optional[str] = None
     defect_notes: Optional[str] = None
@@ -348,6 +367,58 @@ def require_role(*roles: str):
         return user
     return checker
 
+
+# Field yang TIDAK boleh keluar ke teknisi. Aturan bisnis: teknisi fokus
+# pada pekerjaan, tidak perlu melihat harga jual maupun komisi. disembunyikan
+# di backend (bukan cuma di frontend) supaya tidak bisa dibaca lewat DevTools.
+_FIELD_TEKAN_HIDDEN = ("harga", "tech_commission")
+
+
+def _sembunyikan_biaya(baris: list[dict], user: dict) -> list[dict]:
+    """Hapus field harga/komisi kalau yang meminta adalah teknisi."""
+    if user.get("role") != "technician":
+        return baris
+    return [{k: v for k, v in row.items() if k not in _FIELD_TEKAN_HIDDEN} for row in baris]
+
+
+# Peran yang boleh melihat kontak pelanggan. Mitra drop point perlu nomor
+# WhatsApp untuk mengabari waktu shoes-nya sudah siap diambil. Teknisi tidak
+# perlu, jadi daftar telepon pelanggan tidak ikut ke perangkatnya.
+_PERAN_BISA_LIHAT_KONTAK = ("admin", "drop_point")
+
+
+def _sertakan_kontak(baris: list[dict], user: dict) -> list[dict]:
+    """
+    Tambahkan nama + nomor WhatsApp pelanggan ke setiap transaksi.
+
+    Hanya untuk admin dan drop point. Konsumen tidak butuh (itu datanya sendiri)
+    dan teknisi tidak boleh -- supaya daftar telepon pelanggan tidak bocor ke
+    perangkat teknisi.
+    """
+    if user.get("role") not in _PERAN_BISA_LIHAT_KONTAK or not baris:
+        return baris
+
+    owner_ids = {r.get("user_id") for r in baris if r.get("user_id")}
+    if not owner_ids:
+        return baris
+
+    pelanggan = (
+        supabase.from_("profiles")
+        .select("id, full_name, phone")
+        .in_("id", list(owner_ids))
+        .execute().data or []
+    )
+    peta = {p["id"]: p for p in pelanggan}
+
+    return [
+        {**r, "customer": peta.get(r.get("user_id"))} for r in baris
+    ]
+
+
+def _siapkan_transaksi(baris: list[dict], user: dict) -> list[dict]:
+    """Terapkan seluruh aturan bentuk respons sesuai peran pemohon."""
+    return _sertakan_kontak(_sembunyikan_biaya(baris, user), user)
+
 # ==========================================
 # ROOT & HEALTH
 # ==========================================
@@ -499,6 +570,43 @@ def admin_stats(_: dict = Depends(require_role("admin"))):
     }
 
 
+class AnalyticsResponse(BaseModel):
+    ringkasan: str
+    sumber: str = Field(..., description="'ai' atau 'fallback'")
+    model: Optional[str] = None
+    catatan: Optional[str] = None
+    fakta: dict
+
+
+@app.get("/api/analytics/summary", response_model=AnalyticsResponse, tags=["Analytics"])
+def analytics_summary(_: dict = Depends(require_role("admin"))):
+    """
+    Ringkasan bisnis + angka agregat untuk dashboard admin.
+
+    Admin-only dengan sengaja: fakta di sini termasuk beban kerja per teknisi,
+    jadi tidak boleh bocor ke teknisi, drop point, atau konsumen.
+
+    Kalau OpenRouter sedang tidak tersedia, endpoint ini tetap mengembalikan
+    ringkasan yang dihitung dari data langsung (sumber='fallback'). Frontend
+    menampilkan catatan penyebabnya, jadi tidak pernah menampilkan string kosong.
+    """
+    try:
+        return analytics.build_summary(supabase)
+    except Exception as exc:  # noqa: BLE001
+        # Analytics tidak boleh menjatuhkan dashboard. Kembalikan fakta kosong
+        # beserta pesan, supaya UI masih bisa menampilkan sesuatu yang jelas.
+        return {
+            "ringkasan": (
+                "Ringkasan otomatis belum bisa dihitung saat ini. "
+                "Data dashboard di bawah tetap bisa dibaca normal."
+            ),
+            "sumber": "error",
+            "model": None,
+            "catatan": f"Gagal menghitung analytics: {type(exc).__name__}.",
+            "fakta": {},
+        }
+
+
 # ==========================================
 # CRUD SEPATU (SHOES) - Master Data & Price List
 # ==========================================
@@ -633,7 +741,7 @@ def list_transaksi(
         query = query.eq("user_id", user_id)
 
     result = query.order("created_at", desc=True).limit(limit).execute()
-    return result.data
+    return _siapkan_transaksi(result.data or [], user)
 
 @app.get("/api/transaksi/{transaksi_id}", response_model=TransactionResponse, tags=["Transaksi"])
 def get_transaksi(transaksi_id: str, user: dict = Depends(get_current_user)):
@@ -642,7 +750,7 @@ def get_transaksi(transaksi_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(404, "Transaksi tidak ditemukan")
     if not _bisa_lihat(user, result.data[0]):
         raise HTTPException(403, "Kamu tidak punya akses ke transaksi ini")
-    return result.data[0]
+    return _siapkan_transaksi([result.data[0]], user)[0]
 
 @app.get("/api/transaksi/tracking/{kode}", tags=["Transaksi"])
 def tracking_transaksi(kode: str):

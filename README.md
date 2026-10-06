@@ -22,6 +22,7 @@ Prinsip proyek: **Free Tier First** — tidak butuh kartu kredit.
 
 ```
 main.py               Backend FastAPI (semua endpoint)
+analytics.py          Ringkasan AI (OpenRouter) + fallback berbasis aturan
 bootstrap_admin.py    Sekali jalan: set password admin
 manage_users.py       Lihat daftar akun + reset password
 check_schema.py       Cek apakah kolom database sudah lengkap
@@ -35,7 +36,8 @@ requirements.txt      Dependency Python
 
 frontend/             React + Vite + Tailwind
   src/components/    Navbar, Catalog, BookingModal, StatusTracker, LoginModal,
-                     AdminDashboard, Toast
+                     LogoutConfirm, AnalyticsSummary, AdminDashboard,
+                     TeknisiPage, DropPointPage, CustomerAccount, Toast
   src/contexts/      AuthContext
   src/services/      api.js (axios + interceptor)
   src/utils/         helpers.js (formatRupiah, formatDate, getStatusConfig)
@@ -252,6 +254,7 @@ Script yang tersedia:
 | GET          | `/api/transaksi/{id}`            | JWT           | Hanya pemilik/teknisi/admin                                    |
 | PUT          | `/api/transaksi/{id}/status`     | teknisi/admin  | Update status. Wajib `photo_after` untuk Selesai/Siap diambil   |
 | GET          | `/api/stats/admin`               | admin         | Agregat dashboard                                              |
+| GET          | `/api/analytics/summary`         | admin         | Ringkasan AI + angka agregat (fallback otomatis)               |
 | POST/PUT/    | `/api/sepatu`                    | admin         | Kelola master layanan & harga                                  |
 | DELETE       | `/api/sepatu/{id}`               | admin         | Hapus layanan                                                  |
 | GET          | `/api/stock`                     | admin/teknisi | `?low_stock=true` untuk item menipis                            |
@@ -270,6 +273,46 @@ python check_auth.py
 ```
 
 Script itu gagal (exit 1) kalau ada endpoint non-publik yang lupa diproteksi.
+
+### Aturan privasi yang ditegakkan backend
+
+Beberapa field sengaja **tidak pernah dikirim** ke peran tertentu, jadi tidak
+bisa dibaca meski lewat DevTools:
+
+| Peran | Yang dihapus | Alasan |
+|---|---|---|
+| teknisi | `harga`, `tech_commission` | Teknisi fokus pada pekerjaan, bukan angka financials |
+| teknisi | `customer` (nama + nomor) | Daftar telepon pelanggan tidak boleh ada di perangkat teknisi |
+| konsumen | `customer` | Itu datanya sendiri, tidak ada gunanya dikirim ulang |
+| drop point | — | Melihat seluruh transaksi memang tugasnya, termasuk kontak untuk mengabari |
+
+---
+
+## Ringkasan AI (OpenRouter)
+
+Panel admin menampilkan analisis 14 hari terakhir: tren omzet, layanan
+terlaris, beban kerja per teknisi, stok kritis, dan pekerjaan yang tertahan.
+
+Dua jalur, dan UI selalu memberi tahu yang mana yang dipakai:
+
+| `sumber` | Kapan dipakai | Hasil |
+|---|---|---|
+| `ai` | `OPENROUTER_API_KEY` ada dan panggilan berhasil | Naratif seperti tulisan analis |
+| `fallback` | Key kosong, model habis kuota (429), timeout, atau model dihapus dari katalog | Ringkasan deterministik dari `analytics.py`, tanpa jaringan |
+| `error` | Backend gagal menghitung (mis. kolom berubah) | Panel angka tetap tampil, naratif diganti pesan error |
+
+Jadi halaman dashboard **tidak pernah kosong** hanya karena layanan AI sedang
+tidak sehat. Fallback butuh nol konfigurasi.
+
+Aktifkan dengan isi `OPENROUTER_API_KEY` di `.env` (gratis, ambil di
+<https://openrouter.ai/keys>). Model default `nvidia/nemotron-3-super-120b-a12b:free`
+— kalau habis kuota, ganti ke model lain dari daftar
+<https://openrouter.ai/models?q=:free>.
+
+Yang dikirim ke OpenRouter **hanya angka agregat**: jumlah transaksi, omzet,
+status, nama layanan, sisa stok. Kode transaksi, nomor telepon, dan nama orang
+tidak pernah ikut. Endpoint-nya admin-only, dan `test_api.py` memverifikasi
+kelima hal tersebut.
 
 ---
 
@@ -302,6 +345,7 @@ aman untuk fork yang tidak punya akses ke database.
    | `SUPABASE_SERVICE_ROLE_KEY` | service role key dari Supabase → Project Settings → API |
    | `JWT_SECRET_KEY` | sama persis dengan yang ada di `.env` lokal |
    | `SUPABASE_URL` | opsional; kalau kosong dipakai default project ini |
+   | `OPENROUTER_API_KEY` | opsional; tanpa ini ringkasan AI otomatis jatuh ke fallback |
 
 3. Push lagi, atau jalankan workflow manual.
 

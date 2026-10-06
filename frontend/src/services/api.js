@@ -93,3 +93,8 @@ export const stockApi = {
 export const statsApi = {
   admin: () => api.get('/api/stats/admin'),
 }
+
+/** Ringkasan AI + angka agregat. Admin-only di backend. */
+export const analyticsApi = {
+  summary: () => api.get('/api/analytics/summary'),
+}

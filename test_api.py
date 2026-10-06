@@ -219,6 +219,91 @@ if tokens.get("technician"):
 
 
 # =============================================================
+section("9. Endpoint analytics (ringkasan AI)")
+
+# Admin boleh. Fallback pun tetap harus mengembalikan ringkasan yang bisa
+# dibaca, karena itu yang membuat halaman dashboard tidak pernah kosong.
+if tokens.get("admin"):
+    r = client.get("/api/analytics/summary", headers=admin_h)
+    check("admin bisa ambil ringkasan analytics", r.status_code == 200,
+          f"HTTP {r.status_code}")
+    if r.status_code == 200:
+        body = r.json()
+        check("sumber ringkasan valid", body.get("sumber") in ("ai", "fallback", "error"),
+              f"sumber={body.get('sumber')}")
+        check("ringkasan tidak kosong", bool((body.get("ringkasan") or "").strip()),
+              "ringkasan kosong")
+        check("fakta terisi", isinstance(body.get("fakta"), dict) and len(body["fakta"]) > 0,
+              "fakta kosong")
+
+# Hanya admin. Ringkasan memuat beban kerja per teknisi, jadi tidak boleh
+# bocor ke teknisi, drop point, maupun konsumen.
+for role in ("technician", "customer"):
+    if tokens.get(role):
+        h = {"Authorization": f"Bearer {tokens[role]}"}
+        r = client.get("/api/analytics/summary", headers=h)
+        check(f"{role} DITOLAK akses analytics", r.status_code in (401, 403),
+              f"HTTP {r.status_code} -- BOCOR!")
+
+# Tanpa token sama sekali.
+r = client.get("/api/analytics/summary")
+check("anon DITOLAK akses analytics", r.status_code in (401, 403),
+      f"HTTP {r.status_code} -- BOCOR!")
+
+# Fallback harus tetap jalan walau OpenRouter dimatikan Total.
+import analytics as _analytics  # noqa: E402
+
+fakta_uji = _analytics.gather_facts(main.supabase)
+teks_fallback = _analytics.rule_based_summary(fakta_uji)
+check("rule-based fallback menghasilkan teks", bool(teks_fallback.strip()), "kosong")
+check("fallback tidak memuat 'None' atau '{'", "None" not in teks_fallback and "{" not in teks_fallback,
+      "ada placeholder yang bocor ke teks")
+check("key OpenRouter tidak ikut ke fakta",
+      not any("sk-or-v1" in str(v) for v in fakta_uji.values()), "key bocor ke fakta")
+
+
+# =============================================================
+section("10. Teknisi tidak menerima harga & komisi")
+
+# Ini aturan bisnis yang ditegakkan di BACKEND, bukan sekadar disembunyikan
+# di UI. Kalau suatu saat ada yang mengubah halaman teknisi, angkanya tetap
+# tidak akan sampai ke sana.
+if tokens.get("technician"):
+    r = client.get("/api/transaksi", headers=tech_h)
+    if r.status_code == 200 and r.json():
+        baris = r.json()
+        ada_harga = [b for b in baris if b.get("harga") is not None]
+        ada_komisi = [b for b in baris if b.get("tech_commission") is not None]
+        check("harga tidak terkirim ke teknisi", not ada_harga,
+              f"{len(ada_harga)} baris masih punya harga -- BOCOR!")
+        check("komisi tidak terkirim ke teknisi", not ada_komisi,
+              f"{len(ada_komisi)} baris masih punya komisi -- BOCOR!")
+        check("data pekerjaan tetap lengkap", all(b.get("kode") for b in baris),
+              "kode tracking hilang")
+    else:
+        check("teknisi bisa ambil daftar tugasnya", False, f"HTTP {r.status_code}")
+
+    # Detail satu transaksi juga harus bebas harga.
+    if client_tech_id:
+        punya = main.supabase.from_("transactions").select("id").eq("tech_id", client_tech_id).execute().data
+        if punya:
+            r = client.get(f"/api/transaksi/{punya[0]['id']}", headers=tech_h)
+            if r.status_code == 200:
+                d = r.json()
+                check("detail transaksi teknisi bebas harga",
+                      d.get("harga") is None and d.get("tech_commission") is None,
+                      "harga/komisi bocor di detail")
+
+# Bandingkan: admin dan konsumen tetap harus menerima harga.
+if tokens.get("admin"):
+    r = client.get("/api/transaksi", headers=admin_h)
+    if r.status_code == 200 and r.json():
+        check("admin tetap menerima harga",
+              any(b.get("harga") is not None for b in r.json()),
+              "harga hilang untuk admin -- regresi!")
+
+
+# =============================================================
 print("\n" + "=" * 52)
 print(f"HASIL: {passed} lulus, {failed} gagal")
 print("=" * 52)

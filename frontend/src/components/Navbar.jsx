@@ -2,12 +2,25 @@ import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { LogOut, Footprints } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import LogoutConfirm from './LogoutConfirm'
 import { cn, getRoleLabel, getRoleColor } from '../utils/helpers'
 
+/* Halaman beranda tiap peran. Dipakai di navbar supaya setelah login
+   teknisi/mitra/konsumen langsung diarahkan ke panelnya, bukan ke Beranda. */
+const HALAMAN_PERAN = {
+  admin: { path: '/admin', label: 'Panel Admin' },
+  technician: { path: '/teknisi', label: 'Panel Teknisi' },
+  drop_point: { path: '/mitra', label: 'Panel Mitra' },
+  customer: { path: '/akun', label: 'Sepatu Saya' },
+}
+
 export default function Navbar() {
-  const { user, logout, isAuthenticated, isAdmin } = useAuth()
+  const { user, isAuthenticated } = useAuth()
   const location = useLocation()
   const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [konfirmasiKeluar, setKonfirmasiKeluar] = useState(false)
+
+  const panelPeran = HALAMAN_PERAN[user?.role]
 
   const navItems = [
     { path: '/', label: 'Beranda' },
@@ -24,8 +37,9 @@ export default function Navbar() {
     )
 
   return (
-    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-slate-200">
-      <nav className="container-main" aria-label="Navigasi utama">
+    <>
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-slate-200">
+        <nav className="container-main" aria-label="Navigasi utama">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2" aria-label="Komang SAC beranda">
@@ -42,9 +56,9 @@ export default function Navbar() {
                 {item.label}
               </Link>
             ))}
-            {isAdmin && (
-              <Link to="/admin" className={navLinkClass('/admin')}>
-                Panel Admin
+            {panelPeran && (
+              <Link to={panelPeran.path} className={navLinkClass(panelPeran.path)}>
+                {panelPeran.label}
               </Link>
             )}
           </div>
@@ -81,7 +95,7 @@ export default function Navbar() {
                           {getRoleLabel(user?.role)}
                         </span>
                       </div>
-                      {isAdmin && (
+                      {user?.role === 'admin' && (
                         <Link
                           to="/admin/stock"
                           className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
@@ -91,7 +105,10 @@ export default function Navbar() {
                         </Link>
                       )}
                       <button
-                        onClick={logout}
+                        onClick={() => {
+                          setDropdownOpen(false)
+                          setKonfirmasiKeluar(true)
+                        }}
                         className="w-full text-left px-4 py-2 text-sm text-rose-600 hover:bg-slate-50"
                       >
                         Keluar
@@ -116,14 +133,17 @@ export default function Navbar() {
                 {item.label}
               </Link>
             ))}
-            {isAdmin && (
-              <Link to="/admin" className={navLinkClass('/admin')}>
-                Panel Admin
+            {panelPeran && (
+              <Link to={panelPeran.path} className={navLinkClass(panelPeran.path)}>
+                {panelPeran.label}
               </Link>
             )}
           </div>
         </div>
       </nav>
-    </header>
+      </header>
+
+      <LogoutConfirm open={konfirmasiKeluar} onClose={() => setKonfirmasiKeluar(false)} />
+    </>
   )
 }

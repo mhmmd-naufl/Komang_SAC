@@ -7,6 +7,11 @@ import BookingModal from './components/BookingModal'
 import AdminDashboard from './components/AdminDashboard'
 import LoginModal from './components/LoginModal'
 import StatusTracker from './components/StatusTracker'
+import LogoutConfirm from './components/LogoutConfirm'
+import AnalyticsSummary from './components/AnalyticsSummary'
+import TeknisiPage from './components/TeknisiPage'
+import DropPointPage from './components/DropPointPage'
+import CustomerAccount from './components/CustomerAccount'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { Toaster } from './components/Toast'
 import { cn } from './utils/helpers'
@@ -217,13 +222,27 @@ function ProtectedRoute({ children, allowedRoles }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Dashboard admin -- bungkus analytics + tabelomzet yang sudah ada     */
+/* ------------------------------------------------------------------ */
+
+function AdminHome() {
+  return (
+    <div className="space-y-6">
+      <AnalyticsSummary />
+      <AdminDashboard />
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /* Admin layout                                                        */
 /* ------------------------------------------------------------------ */
 
 function AdminLayout() {
-  const { user, logout } = useAuth()
+  const { user } = useAuth()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [konfirmasiKeluar, setKonfirmasiKeluar] = useState(false)
 
   const navItems = [
     { path: '/admin', label: 'Dashboard', icon: LayoutDashboard, exact: true },
@@ -283,7 +302,7 @@ function AdminLayout() {
                 <p className="text-xs text-slate-500 capitalize">{user?.role}</p>
               </div>
               <button
-                onClick={logout}
+                onClick={() => setKonfirmasiKeluar(true)}
                 className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-rose-600"
                 title="Keluar"
               >
@@ -311,6 +330,81 @@ function AdminLayout() {
           <Outlet />
         </main>
       </div>
+
+      <LogoutConfirm
+        open={konfirmasiKeluar}
+        onClose={() => setKonfirmasiKeluar(false)}
+      />
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Layout peran lain (teknisi, drop point, konsumen)                    */
+/* ------------------------------------------------------------------ */
+
+const JUDUL_PERAN = {
+  technician: { judul: 'Panel Teknisi', sub: 'Pekerjaan yang sedang kamu tangani' },
+  drop_point: { judul: 'Panel Mitra', sub: 'Titipan dan notifikasi pelanggan' },
+  customer: { judul: 'Shoes Saya', sub: 'Riwayat dan progres cucianmu' },
+}
+
+function RoleLayout() {
+  const { user } = useAuth()
+  const [konfirmasiKeluar, setKonfirmasiKeluar] = useState(false)
+  const meta = JUDUL_PERAN[user?.role] || { judul: 'Komang SAC', sub: '' }
+  const Inisial = user?.full_name?.charAt(0).toUpperCase() || '?'
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+        <div className="container-main flex items-center gap-4 h-16">
+          <Link to="/" className="flex items-center gap-2 shrink-0">
+            <span className="h-8 w-8 rounded-lg bg-primary-600 flex items-center justify-center">
+              <Footprints className="h-4 w-4 text-white" />
+            </span>
+            <span className="hidden sm:block font-bold text-primary-700">Komang SAC</span>
+          </Link>
+
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-slate-900 truncate">{meta.judul}</p>
+            <p className="text-[11px] text-slate-500 truncate">{meta.sub}</p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="hidden sm:block text-right">
+              <p className="text-xs font-medium text-slate-900">{user?.full_name}</p>
+              <p className="text-[10px] text-slate-500">{user?.phone}</p>
+            </div>
+            <div className="h-9 w-9 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 font-semibold text-sm shrink-0">
+              {Inisial}
+            </div>
+            <button
+              onClick={() => setKonfirmasiKeluar(true)}
+              className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-rose-600"
+              title="Keluar"
+              aria-label="Keluar dari akun"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="flex-1 container-main py-6 sm:py-8">
+        <Outlet />
+      </main>
+
+      <footer className="border-t border-slate-200 bg-white py-5">
+        <div className="container-main text-center text-xs text-slate-400">
+          Komang SAC &copy; 2026
+        </div>
+      </footer>
+
+      <LogoutConfirm
+        open={konfirmasiKeluar}
+        onClose={() => setKonfirmasiKeluar(false)}
+      />
     </div>
   )
 }
@@ -348,7 +442,7 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<AdminDashboard />} />
+        <Route index element={<AdminHome />} />
         <Route
           path="sepatu"
           element={<Placeholder title="Kelola Sepatu" description="CRUD master sepatu, harga, dan jenis treatment." />}
@@ -365,6 +459,41 @@ function AppRoutes() {
           path="users"
           element={<Placeholder title="Pengguna" description="Kelola admin, teknisi, pelanggan, dan drop point." />}
         />
+      </Route>
+
+      {/* Halaman per-role. Semua memakai RoleLayout yang sama; bedanya hanya
+          halaman di dalam dan aturan akses yang ditegakkan ProtectedRoute. */}
+      <Route
+        path="/teknisi"
+        element={
+          <ProtectedRoute allowedRoles={['technician']}>
+            <RoleLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<TeknisiPage />} />
+      </Route>
+
+      <Route
+        path="/mitra"
+        element={
+          <ProtectedRoute allowedRoles={['drop_point']}>
+            <RoleLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<DropPointPage />} />
+      </Route>
+
+      <Route
+        path="/akun"
+        element={
+          <ProtectedRoute allowedRoles={['customer']}>
+            <RoleLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<CustomerAccount />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
