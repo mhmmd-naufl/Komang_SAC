@@ -69,9 +69,19 @@ export const transactionsApi = {
     api.get(`/api/transaksi/tracking/${encodeURIComponent(kode)}`),
   create: (data) => api.post("/api/transaksi", data),
   updateStatus: (id, data) => api.put(`/api/transaksi/${id}/status`, data),
+  update: (id, data) => api.put(`/api/transaksi/${id}`, data),
   /** Admin-only. Finalisasi harga untuk layanan ber-harga-rentang. */
   setHarga: (id, harga, alasan) =>
     api.put(`/api/transaksi/${id}/harga`, { harga, alasan }),
+  /** Upload foto transaksi. */
+  uploadPhoto: (id, jenis, file) => {
+    const formData = new FormData();
+    formData.append('jenis', jenis);
+    formData.append('file', file);
+    return api.post(`/api/transaksi/${id}/photo`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
 };
 
 export const usersApi = {

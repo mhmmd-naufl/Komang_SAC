@@ -87,6 +87,80 @@ function FilterStatus({ value, onChange, hitung, tersedia }) {
   );
 }
 
+
+/** Komponen upload foto per jenis */
+function PhotoUpload({ transaksi, jenis, label, wajib, onUpload }) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    // Validasi file
+    if (!file.type.startsWith("image/")) {
+      setError("File harus berupa gambar");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Ukuran maksimal 5MB");
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+    try {
+      await transactionsApi.uploadPhoto(transaksi.id, jenis, e.target.files[0]);
+      setError(null);
+      if (onUpload) onUpload();
+    } catch (err) {
+      setError(err.friendlyMessage || err.message || "Gagal upload");
+    } finally {
+      setUploading(false);
+      e.target.value = ""; // Reset input
+    }
+  };
+
+  const hasPhoto = transaksi[jenis === "before" ? "photo_before" : 
+                            jenis === "after" ? "photo_after" : "photo_defect"];
+
+  return (
+    <div className="p-3 rounded-xl bg-white border border-dashed border-slate-200 text-center">
+      <input
+        type="file"
+        accept="image/*"
+        onChange={handleUpload}
+        disabled={uploading}
+        className="sr-only"
+        id={`upload-${jenis}`}
+      />
+      <label 
+        htmlFor={`upload-${jenis}`}
+        className={`cursor-pointer w-full h-full flex flex-col items-center justify-center p-3 ${uploading ? "opacity-50 pointer-events-none" : ""}`}
+      >
+        <Camera className="h-5 w-5 text-slate-300 mx-auto mb-1" />
+        <p className="text-[11px] text-slate-500">{label}</p>
+        <p className="text-[10px] mt-0.5 font-medium">
+          {hasPhoto 
+            ? (uploading ? "Mengupload..." : "Tersimpan ✓") 
+            : (wajib ? (uploading ? "Mengupload..." : "WAJIB") : "Opsional")}
+          </p>
+        {error && <p className="text-[10px] text-rose-500 mt-1">{error}</p>}
+      </label>
+      {hasPhoto && (
+        <a
+          href={transaksi[jenis === "before" ? "photo_before" : jenis === "after" ? "photo_after" : "photo_defect"]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-2 inline-flex items-center gap-1 text-xs text-primary-600 hover:underline"
+        >
+          <span>Lihat foto</span>
+        </a>
+      )}
+    </div>
+  );
+}
+
 export default function TeknisiPage() {
   const { user } = useAuth();
   const [transaksi, setTransaksi] = useState([]);
@@ -154,7 +228,12 @@ export default function TeknisiPage() {
     setSibuk(trx.id);
     setPesan(null);
     try {
-      const payload = { status: statusBaru };
+      const payload = {
+        status: statusBaru,
+        photo_before: trx.photo_before || null,
+        photo_after: trx.photo_after || null,
+        photo_defect: trx.photo_defect || null,
+      };
       const res = await transactionsApi.updateStatus(trx.id, payload);
       setTransaksi((prev) =>
         prev.map((t) => (t.id === trx.id ? { ...t, ...res.data } : t)),
@@ -409,43 +488,28 @@ export default function TeknisiPage() {
                         </div>
                       )}
 
-                      {/* Foto -- belum ada Storage, jadi placeholder */}
-                      <div className="grid grid-cols-2 gap-3 mb-4">
-                        <div className="p-3 rounded-xl bg-white border border-dashed border-slate-200 text-center">
-                          <Camera className="h-5 w-5 text-slate-300 mx-auto mb-1" />
-                          <p className="text-[11px] text-slate-500">
-                            Foto sebelum
-                          </p>
-                          <p className="text-[10px] text-slate-400 mt-0.5">
-                            {trx.photo_before ? "Tersimpan" : "Belum ada"}
-                          </p>
-                        </div>
-                        <div
-                          className={cn(
-                            "p-3 rounded-xl text-center border border-dashed",
-                            trx.photo_after
-                              ? "bg-white border-slate-200"
-                              : "bg-rose-50 border-rose-200",
-                          )}
-                        >
-                          <Camera
-                            className={cn(
-                              "h-5 w-5 mx-auto mb-1",
-                              trx.photo_after
-                                ? "text-slate-300"
-                                : "text-rose-400",
-                            )}
-                          />
-                          <p className="text-[11px] text-slate-500">
-                            Foto sesudah
-                          </p>
-                          <p className="text-[10px] text-rose-500 mt-0.5 font-medium">
-                            {trx.photo_after
-                              ? "Tersimpan"
-                              : "WAJIB sebelum Selesai"}
-                          </p>
-                        </div>
-                      </div>
+                      {/* Foto upload ke Supabase Storage */}
+                      <PhotoUpload
+                        transaksi={trx}
+                        jenis="before"
+                        label="Foto sebelum"
+                        wajib={true}
+                        onUpload={() => muat()}
+                      />
+                      <PhotoUpload
+                        transaksi={trx}
+                        jenis="after"
+                        label="Foto sesudah"
+                        wajib={true}
+                        onUpload={() => muat()}
+                      />
+                      <PhotoUpload
+                        transaksi={trx}
+                        jenis="defect"
+                        label="Defect (opsional)"
+                        wajib={false}
+                        onUpload={() => muat()}
+                      />
 
                       {/* Advance status */}
                       {filter === "tersedia" ? (

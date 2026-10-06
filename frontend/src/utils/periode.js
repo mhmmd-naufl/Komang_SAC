@@ -28,39 +28,27 @@ export const NAMA_BULAN = [
   'Desember',
 ]
 
-/** Preset yang bisa dipilih cepat. */
-export const PRESET = [
-  { kunci: 'bulan_ini', label: 'Bulan ini' },
-  { kunci: 'bulan_lalu', label: 'Bulan lalu' },
-  { kunci: 'tahun_ini', label: 'Tahun ini' },
-  { kunci: 'semua', label: 'Semua waktu' },
-]
-
-/** Periode default saat dashboard dibuka: bulan berjalan. */
+/**
+ * Periode default saat dashboard dibuka: bulan berjalan (minimal 2026).
+ */
 export function periodeAwal() {
   const sekarang = new Date()
+  const tahunSekarang = sekarang.getFullYear()
   return {
-    preset: 'bulan_ini',
     bulan: sekarang.getMonth() + 1,
-    tahun: sekarang.getFullYear(),
+    tahun: Math.max(sekarang.getFullYear(), 2026),
   }
 }
 
 /**
  * Ubah nilai periode jadi parameter query backend.
  *
- * Preset 'bulan_ini' dan 'bulan_lalu' sengaja DIJADIkan jadi angka bulan/tahun
- * yang sudah dihitung di sini, lalu dikirim apa adanya. Alasannya: backend tidak
- * boleh tahu soal "hari ini" -- kalau tidak, angka bulan ini bisa berbeda antara
- * request yang dibuat jam 23:59 dan yang dibuat jam 00:01, dan laporan yang
- * di-refresh sendiri berubah isi.
- *
  * Hasilnya berisi dua kelompok yang harus dikirim ke endpoint berbeda:
  *
- *   - `periode` / `bulan` / `tahun`  -> /api/stats/admin dan /api/analytics/summary.
+ *   - `bulan` / `tahun`  -> /api/stats/admin dan /api/analytics/summary.
  *     Backend yang menghitung batas bulan/tahun, supaya bucket harian dan
  *     bulannya dijamin sama dengan yang dipakai untuk omzet.
- *   - `selesaiDari` / `selesai-exclusive` -> /api/transaksi, untuk daftar
+ *   - `selesaiDari` / `selesaiSampai` -> /api/transaksi, untuk daftar
  *     transaksi yang akan diekspor.
  *
  * Batas atas pada `selesaiSampai` SENGAJA eksklusif (menunjuk ke 1 pukul 00:00
@@ -73,57 +61,29 @@ export function periodeAwal() {
  * zona waktu mana pun di dunia.
  */
 export function keParameter(nilai) {
-  const sekarang = new Date()
+  const bulan = nilai.bulan
+  const tahun = nilai.tahun
 
-  if (nilai.preset === 'semua') {
+  if (!bulan || !tahun) {
     return { periode: 'semua' }
   }
 
-  let bulan = nilai.bulan
-  let tahun = nilai.tahun
-
-  if (nilai.preset === 'bulan_ini') {
-    bulan = sekarang.getMonth() + 1
-    tahun = sekarang.getFullYear()
-  } else if (nilai.preset === 'bulan_lalu') {
-    const lalu = new Date(sekarang.getFullYear(), sekarang.getMonth() - 1, 1)
-    bulan = lalu.getMonth() + 1
-    tahun = lalu.getFullYear()
-  } else if (nilai.preset === 'tahun_ini') {
-    tahun = sekarang.getFullYear()
-  }
-
-  // Kalau preset tahun, `bulan` sengaja tidak dikirim -- backend otomatis
-  // memakai granularitas per bulan untuk periode tahunan.
-  if (nilai.preset === 'tahun_ini') {
-    return {
-      periode: 'tahun',
-      tahun,
-      selesaiDari: `${tahun}-01-01`,
-      selesaiSampai: `${tahun + 1}-01-01`,
-    }
-  }
+  const selesaiDari = `${tahun}-${String(bulan).padStart(2, '0')}-01`
+  const selesaiSampai =
+    bulan === 12
+      ? `${tahun + 1}-01-01`
+      : `${tahun}-${String(bulan + 1).padStart(2, '0')}-01`
 
   return {
-    periode: 'bulan',
     bulan,
     tahun,
-    selesaiDari: `${tahun}-${String(bulan).padStart(2, '0')}-01`,
-    // Bulan 12 naik ke 1 Januari tahun depan, bukan "2026-13-01".
-    selesaiSampai:
-      bulan === 12
-        ? `${tahun + 1}-01-01`
-        : `${tahun}-${String(bulan + 1).padStart(2, '0')}-01`,
+    selesaiDari,
+    selesaiSampai,
   }
 }
 
 /** Label periode untuk judul dan nama berkas ekspor. */
 export function labelPeriode(nilai) {
-  if (nilai.preset === 'semua') return 'Semua waktu'
-  if (nilai.preset === 'tahun_ini') {
-    const y = new Date().getFullYear()
-    return `Tahun ${nilai.tahun || y}`
-  }
   const bulan = nilai.bulan || new Date().getMonth() + 1
   const tahun = nilai.tahun || new Date().getFullYear()
   return `${NAMA_BULAN[bulan - 1]} ${tahun}`

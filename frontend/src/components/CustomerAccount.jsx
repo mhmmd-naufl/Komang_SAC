@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  Printer,
   Footprints,
   Search,
   MessageCircle,
@@ -277,6 +278,13 @@ export default function CustomerAccount() {
                       >
                         Lacak <ChevronRight className="h-3 w-3" />
                       </a>
+                      <button
+                        onClick={() => window.print()}
+                        className="btn-secondary px-3 py-1.5 text-xs"
+                        title="Cetak invoice"
+                      >
+                        <Printer className="h-3 w-3" />
+                      </button>
                       <button
                         onClick={() => window.open(linkWa('628980570911', templateLacak(t)), '_blank')}
                         className="btn-primary px-3 py-1.5 text-xs"

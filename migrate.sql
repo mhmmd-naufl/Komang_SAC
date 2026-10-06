@@ -16,6 +16,8 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kode TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS defect_notes TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS photo_before TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS photo_after TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS photo_defect TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS photo_defect TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
 -- Tanggal selesai dicatat teknisi saat status jadi Selesai. Dipakai untuk
 -- laporan per bulan/tahun: cucian dihitung masuk periode tanggal SELESAI-nya.

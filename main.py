@@ -204,6 +204,7 @@ class TransactionStatusUpdate(BaseModel):
     tech_id: Optional[str] = None  # Assign teknisi saat update status pertama kali
     photo_before: Optional[str] = None
     photo_after: Optional[str] = None
+    photo_defect: Optional[str] = None
     defect_notes: Optional[str] = None
 
 class CustomerContact(BaseModel):
@@ -258,6 +259,7 @@ class TransactionResponse(TransactionBase):
     tech: Optional[StaffBrief] = None
     photo_before: Optional[str] = None
     photo_after: Optional[str] = None
+    photo_defect: Optional[str] = None
     defect_notes: Optional[str] = None
     catatan_konsumen: Optional[str] = None
     # Diisi backend saat teknisi menandai Selesai (lihat update_transaksi_status).
@@ -737,6 +739,42 @@ def _saring_selesai(
     if selesai is not None:
         query = query.lt(kolom, selesai.isoformat())
     return query
+
+
+def _rentang(
+    rows: list[dict],
+    mulai: Optional[datetime],
+    selesai: Optional[datetime],
+    kolom: str,
+) -> list[dict]:
+    """Ambil baris yang timestamp-nya masuk interval [mulai, selesai)."""
+    out: list[dict] = []
+    for row in rows:
+        value = row.get(kolom)
+        if not value:
+            continue
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (AttributeError, ValueError):
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if mulai is not None and dt < mulai:
+            continue
+        if selesai is not None and dt >= selesai:
+            continue
+        out.append(row)
+    return out
+
+
+def _periode_sebelumnya(
+    mulai: Optional[datetime], selesai: Optional[datetime]
+) -> Optional[tuple[datetime, datetime]]:
+    """Periode yang sama durasinya, tepat sebelum mulai."""
+    if mulai is None or selesai is None:
+        return None
+    durasi = selesai - mulai
+    return (mulai - durasi, mulai)
 
 
 def _hitung_dashboard(supabase, p: dict) -> dict:
@@ -1625,6 +1663,7 @@ def tracking_transaksi(kode: str):
         "catatan_konsumen": trx.get("catatan_konsumen"),
         "photo_before": trx.get("photo_before"),
         "photo_after": trx.get("photo_after"),
+        "photo_defect": trx.get("photo_defect"),
         "shoes": trx.get("shoes"),
         "drop_point": trx.get("drop_points"),
     }
@@ -1828,6 +1867,168 @@ def update_transaksi_harga(
 # ==========================================
 # CRUD PROFILES (USERS)
 # ==========================================
+
+
+
+# ----------------------------------------------------------------
+# ADMIN: Update transaksi (misal ganti teknisi)
+# ----------------------------------------------------------------
+class TransaksiUpdate(BaseModel):
+    tech_id: Optional[str] = None
+
+@app.put("/api/transaksi/{transaksi_id}", response_model=TransactionResponse, tags=["Transaksi"])
+def update_transaksi(
+    transaksi_id: str,
+    update: TransaksiUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Admin-only. Update field transaksi (misalnya reassign teknisi)."""
+    if user["role"] != "admin":
+        raise HTTPException(403, "Hanya admin yang bisa mengubah transaksi")
+
+    existing = supabase.from_("transactions").select("*").eq("id", transaksi_id).execute()
+    if not existing.data:
+        raise HTTPException(404, "Transaksi tidak ditemukan")
+
+    data = {}
+    if update.tech_id is not None and update.tech_id != "":
+        tech = supabase.from_("profiles").select("id").eq("id", update.tech_id).execute()
+        if not tech.data:
+            raise HTTPException(400, "Teknisi tidak ditemukan")
+        data["tech_id"] = update.tech_id
+    elif update.tech_id == "":
+        data["tech_id"] = None
+
+    if not data:
+        raise HTTPException(400, "Tidak ada field yang diupdate")
+
+    data["updated_at"] = get_now_iso()
+    result = supabase.from_("transactions").update(data).eq("id", transaksi_id).execute()
+    if not result.data:
+        raise HTTPException(404, "Transaksi tidak ditemukan")
+    return _siapkan_transaksi([result.data[0]], user)[0]
+
+
+
+# ----------------------------------------------------------------
+# PHOTO UPLOAD (Supabase Storage)
+# ----------------------------------------------------------------
+from fastapi import UploadFile, File, Form
+import uuid
+
+PHOTO_BUCKET = "transaksi-photos"
+
+@app.post("/api/transaksi/{transaksi_id}/photo", tags=["Photo"])
+async def upload_photo(
+    transaksi_id: str,
+    jenis: str = Form(...),  # "before" | "after" | "defect"
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    """Upload foto transaksi ke Supabase Storage."""
+    # Validasi transaksi
+    existing = supabase.from_("transactions").select("*").eq("id", transaksi_id).execute()
+    if not existing.data:
+        raise HTTPException(404, "Transaksi tidak ditemukan")
+    
+    # Validasi jenis
+    if jenis not in ("before", "after", "defect"):
+        raise HTTPException(400, "Jenis foto harus: before, after, atau defect")
+    
+    # Validasi file
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "File harus berupa gambar")
+    
+    # Validasi ukuran (max 5MB)
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(400, "Ukuran file maksimal 5MB")
+    
+    # Generate filename
+    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "jpg"
+    filename = f"{transaksi_id}/{jenis}_{uuid.uuid4().hex[:8]}.{ext}"
+    
+    # Upload ke Supabase Storage
+    try:
+        result = supabase.storage.from_(PHOTO_BUCKET).upload(
+            filename,
+            content,
+            {"content-type": file.content_type, "upsert": "true"}
+        )
+        if hasattr(result, 'error') and result.error:
+            raise Exception(result.error.message)
+    except Exception as e:
+        raise HTTPException(500, f"Gagal upload: {str(e)}")
+    
+    # Get public URL
+    public_url = supabase.storage.from_(PHOTO_BUCKET).get_public_url(filename)
+    
+    # Update transaksi dengan URL foto
+    field_map = {"before": "photo_before", "after": "photo_after", "defect": "photo_defect"}
+    supabase.from_("transactions").update({
+        field_map[jenis]: public_url,
+        "updated_at": get_now_iso()
+    }).eq("id", transaksi_id).execute()
+    
+    return {"url": public_url, "jenis": jenis, "filename": filename}
+
+
+@app.get("/api/transaksi/{transaksi_id}/photo/{jenis}", tags=["Photo"])
+async def get_photo_url(
+    transaksi_id: str,
+    jenis: str,  # "before" | "after" | "defect"
+    user: dict = Depends(get_current_user),
+):
+    """Get signed URL untuk akses foto private (jika bucket private)."""
+    if jenis not in ("before", "after", "defect"):
+        raise HTTPException(400, "Jenis foto tidak valid")
+    
+    existing = supabase.from_("transactions").select("*").eq("id", transaksi_id).execute()
+    if not existing.data:
+        raise HTTPException(404, "Transaksi tidak ditemukan")
+    
+    trx = existing.data[0]
+    field_map = {"before": "photo_before", "after": "photo_after", "defect": "photo_defect"}
+    url = trx.get(field_map[jenis])
+    if not url:
+        raise HTTPException(404, "Foto tidak ditemukan")
+    
+    # Generate signed URL (valid 1 jam)
+    signed = supabase.storage.from_(PHOTO_BUCKET).create_signed_url(
+        f"{transaksi_id}/{jenis}_*.*", 3600
+    )
+    if hasattr(signed, 'error') and signed.error:
+        return {"url": url}
+    return {"url": signed.signedURL}
+
+
+# Endpoint lama untuk kompatibilitas
+@app.post("/api/transaksi/{transaksi_id}/photo-before", tags=["Photo"])
+async def upload_photo_before(
+    transaksi_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    return await upload_photo(transaksi_id, "before", file, user)
+
+
+@app.post("/api/transaksi/{transaksi_id}/photo-after", tags=["Photo"])
+async def upload_photo_after(
+    transaksi_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    return await upload_photo(transaksi_id, "after", file, user)
+
+
+@app.post("/api/transaksi/{transaksi_id}/photo-defect", tags=["Photo"])
+async def upload_photo_defect(
+    transaksi_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    return await upload_photo(transaksi_id, "defect", file, user)
+
 
 @app.post("/api/users", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED, tags=["Users"])
 def create_user(user: ProfileCreate, _: dict = Depends(require_role("admin"))):

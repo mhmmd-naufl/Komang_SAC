@@ -123,14 +123,13 @@ export default function AdminDashboard() {
       else setLoading(true);
       setError(null);
       try {
-        const p = { periode: param.periode };
-        if (param.bulan) p.bulan = param.bulan;
-        if (param.tahun) p.tahun = param.tahun;
+        // Sekarang param sudah berisi { bulan, tahun } langsung
+        const p = { bulan: param.bulan, tahun: param.tahun };
 
         // Core dashboard diambil dari endpoint gabungan supaya satu refresh
         // hanya butuh satu panggilan untuk angka, grafik, dan stok kritis.
         const [dashboard, trx, stock] = await Promise.all([
-          statsApi.dashboard(p),
+          statsApi.dashboard({ bulan: param.bulan, tahun: param.tahun }),
           transactionsApi.list({ limit: 8 }),
           stockApi.list({ low_stock: true }),
         ]);
@@ -147,7 +146,7 @@ export default function AdminDashboard() {
         // Analytics boleh gagal: panel AI menampilkan penyebabnya, sementara
         // angka dan grafik di atasnya tetap valid. Jadi dipisah try/catch-nya.
         try {
-          const analitik = await analyticsApi.summary(p);
+          const analitik = await analyticsApi.summary({ bulan: param.bulan, tahun: param.tahun });
           setAi(analitik.data);
           setErrorAi(null);
         } catch (errAi) {
@@ -629,3 +628,5 @@ export default function AdminDashboard() {
     </div>
   );
 }
+
+

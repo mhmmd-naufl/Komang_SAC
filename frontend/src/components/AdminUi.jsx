@@ -221,10 +221,21 @@ export const SearchInput = React.memo(function SearchInput({
   placeholder = "Cari...",
   className = "",
 }) {
+  const inputRef = React.useRef(null)
+  
+  // Preserve focus during re-renders
+  React.useEffect(() => {
+    if (inputRef.current && document.activeElement === inputRef.current) {
+      // Input is focused, ensure it stays focused after re-render
+      inputRef.current.focus()
+    }
+  })
+  
   return (
     <div className={cn("relative", className)}>
       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
       <input
+        ref={inputRef}
         type="search"
         value={value}
         onChange={onChange}
