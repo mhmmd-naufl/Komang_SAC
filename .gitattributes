@@ -1,0 +1,22 @@
+# Normalisasi line ending supaya diff tidak berantakan antar Windows/Linux.
+# Disimpan sebagai LF di repo, checkout sesuai platform (CRLF di Windows).
+* text=auto eol=lf
+
+*.py    text eol=lf
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.sql   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+
+# File yang TIDAK boleh diubah newline-nya
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary

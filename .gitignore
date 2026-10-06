@@ -1,0 +1,36 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- Env & secrets ---
+.env
+.env.local
+.env.*.local
+
+# --- Node / frontend ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-error.log*
+
+# --- Editor & OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Test & cache ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+
+# --- Proyek TERPISAH ---
+# Content planner media sosial. Bukan bagian Komang SAC, tidak ikut
+# ter-commit. Folder tetap ada di disk -- hanya diabaikan oleh git.
+content-planner/
