@@ -1,9 +1,20 @@
 # Komang SAC — Sistem Manajemen Cuci Sepatu
 
+[![CI](https://github.com/mhmmd-naufl/Komang_SAC/actions/workflows/ci.yml/badge.svg)](https://github.com/mhmmd-naufl/Komang_SAC/actions/workflows/ci.yml)
+[![Lisensi: MIT](https://img.shields.io/badge/Lisensi-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.142-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com/)
+
 Aplikasi web untuk operasional bisnis cuci sepatu: tracking status oleh pelanggan,
 catatan & foto oleh teknisi, dashboard omzet & stok oleh admin.
 
 Prinsip proyek: **Free Tier First** — tidak butuh kartu kredit.
+
+> Badge CI hijau berarti: frontend lolos lint + build, semua file Python lolos
+> compile, dan `.env` tidak ikut ter-commit. Uji endpoint terhadap database
+> Supabase ikut jalan kalau secret sudah diisi (lihat [CI](#ci-github-actions)).
 
 ---
 
@@ -12,6 +23,7 @@ Prinsip proyek: **Free Tier First** — tidak butuh kartu kredit.
 ```
 main.py               Backend FastAPI (semua endpoint)
 bootstrap_admin.py    Sekali jalan: set password admin
+manage_users.py       Lihat daftar akun + reset password
 check_schema.py       Cek apakah kolom database sudah lengkap
 check_auth.py         Audit: endpoint mana yang belum diproteksi auth
 seed_dummy.py         Isi data dummy (konsumen, teknisi, transaksi, stock)
@@ -152,7 +164,41 @@ Untuk menghapus data dummy (data asli tidak disentuh):
 python seed_dummy.py --reset
 ```
 
-### 5. Jalankan backend
+### 5. Akun dan password
+
+Password **tidak bisa dibaca balik** dari database — tersimpan sebagai hash
+PBKDF2-SHA256. Yang penting saat login adalah password yang **sama** dengan
+yang di-hash, jadi untuk testing cukup pakai akun di bawah:
+
+| Peran | Nomor WhatsApp | Password |
+|---|---|---|
+| Admin | `628980570911` | `password123` |
+| Teknisi | `628991000001` | `password123` |
+| Teknisi | `628991000002` | `password123` |
+| Teknisi | `628991000003` | `password123` |
+| Drop point | `628991000004` | `password123` |
+| Konsumen | `628981000001` | `password123` |
+| Konsumen | `628981000002` | `password123` |
+| Konsumen | `628981000003` | `password123` |
+| Konsumen | `628981000004` | `password123` |
+| Konsumen | `628981000005` | `password123` |
+
+Di halaman `/login` saat `npm run dev`, ada blok **"Akun demo"** — klik salah
+satu untuk mengisi nomor dan password otomatis. Blok itu dibungkus
+`import.meta.env.DEV`, jadi **hilang total di build produksi** (sudah
+diverifikasi: string kredensial tidak ada di dalam `dist/`).
+
+Lihat semua akun dan reset password kapan saja:
+
+```bash
+python manage_users.py                          # daftar semua akun
+python manage_users.py list technician          # filter per role
+python manage_users.py reset 628980570911 "PasswordKuat123"
+```
+
+> Ganti password admin sebelum sistem dipakai sungguhan.
+
+### 6. Jalankan backend
 
 ```bash
 uvicorn main:app --reload
@@ -161,7 +207,7 @@ uvicorn main:app --reload
 Cek `http://127.0.0.1:8000/health` — harus balas Supabase `terkoneksi`.
 Dokumentasi interaktif: `http://127.0.0.1:8000/docs`
 
-### 6. Jalankan frontend
+### 7. Jalankan frontend
 
 ```bash
 cd frontend
@@ -182,7 +228,8 @@ Script yang tersedia:
 | `npm run check` | lint + build (**jalankan sebelum commit**) |
 
 > `no-undef` di ESLint itu penting: di era JS tanpa TypeScript, salah hapus import
-> tidak caught oleh `vite build` — aplikasi crash saat render dan layarnya putih.
+> **tidak ditangkap** oleh `vite build` — aplikasi lolos build, lalu crash saat
+> render dan layarnya putih. That's the exact bug yang pernah terjadi di proyek ini.
 
 ---
 
@@ -226,11 +273,54 @@ Script itu gagal (exit 1) kalau ada endpoint non-publik yang lupa diproteksi.
 
 ---
 
+## CI (GitHub Actions)
+
+Workflow ada di [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Jalan
+otomatis setiap `push` ke `main`, setiap pull request, dan bisa dipicu manual
+lewat tombol **Run workflow**.
+
+Tiga job, diurut dari yang paling ringan:
+
+| Job |_isi_ | Butuh secret? |
+|---|---|---|
+| `frontend` | `npm ci` → ESLint → `vite build` | tidak |
+| `backend-compile` | `py_compile` semua file Python + verifikasi `.env` tidak ter-commit | tidak |
+| `backend-tests` | `check_schema.py`, `check_auth.py`, `test_api.py` | ya — di-*skip* kalau secret kosong |
+
+Job `backend-tests` sengaja tidak gagal kalau secret belum diisi — dia
+menampilkan notifikasi "Test database dilewati" dan sisanya tetap hijau. Ini
+supaya repo tidak pernah merah hanya karena secret belum disiapkan, dan tetap
+aman untuk fork yang tidak punya akses ke database.
+
+### Mengaktifkan uji database (opsional)
+
+1. Buka **Settings → Secrets and variables → Actions → New repository secret**
+2. Tambahkan:
+
+   | Nama secret | Isi |
+   |---|---|
+   | `SUPABASE_SERVICE_ROLE_KEY` | service role key dari Supabase → Project Settings → API |
+   | `JWT_SECRET_KEY` | sama persis dengan yang ada di `.env` lokal |
+   | `SUPABASE_URL` | opsional; kalau kosong dipakai default project ini |
+
+3. Push lagi, atau jalankan workflow manual.
+
+Secret tidak pernah ditulis ke log — hanya dibaca lewat `env:` lalu dipakai
+untuk menyusun file `.env` sementara yang dihapus di step terakhir (`if:
+always()`). `test_api.py` hanya **membaca** database (login + fetch), tidak
+menulis apa pun.
+
+> `SUPABASE_SERVICE_ROLE_KEY` punya akses penuh ke database dan **tidak bisa
+> di-revoke** lewat dashboard. Kalau bocor, generate ulang key-nya di Supabase.
+
+---
+
 ## Sebelum Deploy
 
 - [ ] Jalankan `migrate.sql` di Supabase
 - [ ] Ganti `JWT_SECRET_KEY` di `.env`
-- [ ] Ganti password admin bawaan
+- [ ] Ganti password admin bawaan — `python manage_users.py reset 628980570911 "..."`
+- [ ] Tambahkan secret CI di GitHub (kalau mau uji database jalan di Actions)
 - [ ] **Aktifkan RLS** di Supabase (lihat catatan di `schema.sql`) — anon key sekarang
       masih bisa membaca semua tabel
 - [ ] Set `VITE_API_BASE_URL` untuk Vercel

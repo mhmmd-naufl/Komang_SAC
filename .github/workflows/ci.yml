@@ -1,0 +1,157 @@
+name: CI
+
+# Jalankan saat ada push ke main / branch, saat ada pull request, dan saat
+# workflow ini diubah sendiri.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Batalkan kalau ada commit baru di branch yang sama — hemat menit runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------
+  # Frontend: lint + build. Tidak butuh secret apa pun.
+  # ESLint 'no-undef' di sini yang menangkap bug layar putih: variabel
+  # yang salah dihapus dari import lolos dari vite build, tapi crash
+  # saat render.
+  # ------------------------------------------------------------------
+  frontend:
+    name: Frontend (lint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependency
+        run: npm ci
+
+      - name: Lint + build
+        run: npm run check
+
+  # ------------------------------------------------------------------
+  # Backend: cek sintaks. Tidak butuh secret. Menangkap_import yang
+  # hilang dan salah nama sebelum CI melangkah ke bagian database.
+  # ------------------------------------------------------------------
+  backend-compile:
+    name: Backend (compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependency
+        run: pip install -r requirements.txt
+
+      - name: Cek sintaks semua file Python
+        run: python -m py_compile main.py seed_dummy.py bootstrap_admin.py check_schema.py check_auth.py test_api.py manage_users.py
+
+      - name: Pastikan tidak ada secret yang ter-commit
+        run: |
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error file=.env::.env ikut ter-commit. Hapus dari repo!"
+            exit 1
+          fi
+          echo "Aman: .env tidak ada di repo."
+
+  # ------------------------------------------------------------------
+  # Backend + database Supabase.
+  #
+  # HANYA jalan kalau secret sudah diisi di:
+  #   Settings > Secrets and variables > Actions > New repository secret
+  #     SUPABASE_SERVICE_ROLE_KEY  (wajib)
+  #     JWT_SECRET_KEY             (wajib)
+  #     SUPABASE_URL                (opsional, ada default)
+  #
+  # Kalau secret belum ada, step ini di-skip -- bukan gagal. Jadi repo
+  # tetap hijau untuk fork yang tidak punya akses ke database.
+  #
+  # Catatan: test_api.py hanya MEMBACA (login + fetch). Tidak menulis.
+  # ------------------------------------------------------------------
+  backend-tests:
+    name: Backend (audit auth + uji endpoint)
+    runs-on: ubuntu-latest
+    # Jangan jalan untuk pull request dari luar: menghemat menit runner
+    # dan repo fork tidak punya akses ke database.
+    # CATATAN: context 'secrets' TIDAK bisa dipakai di 'if' level job,
+    # jadi pengecekan secret dilakukan di dalam step.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependency
+        run: pip install -r requirements.txt
+
+      - name: Cek apakah secret database tersedia
+        id: gate
+        env:
+          SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JWT_KEY: ${{ secrets.JWT_SECRET_KEY }}
+        run: |
+          if [ -n "$SERVICE_KEY" ] && [ -n "$JWT_KEY" ]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Test database dilewati::Secret SUPABASE_SERVICE_ROLE_KEY / JWT_SECRET_KEY belum diisi di Settings > Secrets and variables > Actions. Test endpoint tidak dijalankan."
+          fi
+
+      - name: Siapkan environment dari secret
+        if: steps.gate.outputs.has_secrets == 'true'
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          umask 077
+          {
+            echo "SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}"
+            echo "JWT_SECRET_KEY=${JWT_SECRET_KEY}"
+            echo "SUPABASE_URL=${SUPABASE_URL:-https://cssajztordwhsqaonzgn.supabase.co}"
+          } > .env
+          echo "File .env dibuat sementara (tidak masuk git)."
+
+      - name: Cek kolom database
+        if: steps.gate.outputs.has_secrets == 'true'
+        run: python check_schema.py
+
+      - name: Audit proteksi endpoint
+        if: steps.gate.outputs.has_secrets == 'true'
+        run: python check_auth.py
+
+      - name: Uji endpoint + RBAC
+        if: steps.gate.outputs.has_secrets == 'true'
+        run: python test_api.py
+
+      - name: Ringkasan
+        if: steps.gate.outputs.has_secrets == 'true'
+        run: echo "Semua uji backend lulus."
+
+      - name: Bersihkan
+        if: always()
+        run: rm -f .env

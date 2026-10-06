@@ -83,11 +83,11 @@ export default function Navbar() {
                       </div>
                       {isAdmin && (
                         <Link
-                          to="/admin"
+                          to="/admin/stock"
                           className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
                           onClick={() => setDropdownOpen(false)}
                         >
-                          Panel Admin
+                          Kelola Stok
                         </Link>
                       )}
                       <button
@@ -101,14 +101,9 @@ export default function Navbar() {
                 )}
               </div>
             ) : (
-              <>
-                <Link to="/login" className="btn-ghost text-sm hidden sm:inline-flex">
-                  Masuk
-                </Link>
-                <Link to="/login" className="btn-primary text-sm px-3 py-2">
-                  Masuk
-                </Link>
-              </>
+              <Link to="/login" className="btn-primary text-sm px-4 py-2">
+                Masuk
+              </Link>
             )}
           </div>
         </div>
