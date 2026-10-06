@@ -1,14 +1,31 @@
 """
 Analytics + ringkasan AI untuk dashboard admin.
 
-Dua jalur, selalu mengembalikan sesuatu:
+PEMBAGIAN TUGAS YANG DISEPAKATI
+-------------------------------
+AI HANYA untuk dua hal: RINGKASAN dan SARAN. Itu saja.
 
-  1. AI       -> OpenRouter (model gratis). Naratif seperti tulisan analis.
-  2. Fallback -> hitungan deterministik di file ini, Bahasa Indonesia.
+Semua angka, grafik, dan tabel dihitung di file ini dari angka mentah --
+tidak pernah lewat model. Alasannya:
 
-Fallback dipakai kalau: API key kosong, model tidak tersedia (403/429),
-timeout, status server error, atau balasan tidak bisa diparse. Jadi ringkasan
-di dashboard tidak pernah kosong hanya karena layanan AI sedang tidak sehat.
+  1. Angka dari LLM bisa berbeda antara dua pemanggilan untuk data yang sama,
+     jadi dashboard yang "berubah sendiri" saat di-refresh tidak bisa dipercaya
+     untuk menghitung bayar teknisi.
+  2. Model gratis bisa lambat atau mati sewaktu-waktu. Kalau grafik ikut
+     bergantung padanya, seluruh dashboard ikut mati.
+  3. Batas token. Meminta model menulis JSON angka ratusan baris prone
+     ke hallucination di setiap digit.
+
+Jadi alurnya: `gather_facts` menghitung semuanya secara deterministik, lalu
+`openrouter` HANYA membaca angka-angka itu dan menulis narasi + saran. Kalau
+OpenRouter gagal, `rule_based` menulis versi yang sama dari perhitungan lokal.
+
+PEMBAGIAN PERIODE
+-------------------
+Semua omzet dihitung dari `transactions.selesai_at` (tanggal teknisi menandai
+Selesai), bukan `created_at`. Cucian yang masuk tanggal 31 dan selesai tanggal 2
+adalah hasil bulan 2. Bucket harian/bulanan dihitung di zona WIB supaya transaksi
+lewat tengah malam tidak masuk tanggal yang salah.
 
 Catatan privasi: yang dikirim ke OpenRouter hanya angka agregat. Kode transaksi,
 nomor telepon, dan nama orang tidak pernah ikut. Endpoint-nya admin-only.
@@ -17,6 +34,7 @@ nomor telepon, dan nama orang tidak pernah ikut. Endpoint-nya admin-only.
 import os
 import re
 import json
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta, timezone
@@ -39,10 +57,23 @@ STATUS_TAHAP = ["Diterima", "Diproses", "Diperiksa", "Selesai", "Siap diambil"]
 STATUS_FINAL = {"Selesai", "Siap diambil"}
 STATUS_AWAL = ["Diterima", "Diproses", "Diperiksa"]
 
+# Waktu Indonesia. Bucket harian/bulanan dihitung di zona ini; kalau pakai UTC
+# langsung, transaksi yang selesai jam 01:00 WIB masuk ke tanggal sebelumnya.
+ZONA_WIB = timezone(timedelta(hours=7))
+
+NAMA_BULAN = [
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+]
+NAMA_BULAN_SINGKAT = [
+    "Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
+    "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+]
+
 TIMEOUT_DETIK = 45.0
 MAX_TOKENS = 1400
 
-# Beberapa model gratis sempat menampakkankan proses berpikir di depan
+# Beberapa model gratis sempat menampilkan proses berpikir di depan
 # jawaban. Potong supaya dashboard tidak menampilkan "Here's a thinking
 # process" ke user.
 _PIKIR = re.compile(
@@ -57,8 +88,31 @@ def _buang_pemikiran(teks: str) -> str:
     return _PIKIR.sub("", teks, count=1).strip()
 
 
+def _dengan_retry(fn, max_retry=3, base_delay=0.5):
+    """
+    Jalankan fungsi Supabase query dengan retry otomatis.
+    
+    Free tier Supabase connection pooling agresif - koneksi putus kalau idle.
+    Retry dengan exponential backoff (0.5s, 1s, 2s).
+    """
+    last_err = None
+    for attempt in range(max_retry):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            err_str = str(e).lower()
+            # Hanya retry kalau error koneksi (disconnect, timeout, pool)
+            if any(k in err_str for k in ("disconnect", "timeout", "pool", "connection", "remote protocol")):
+                if attempt < max_retry - 1:
+                    time.sleep(base_delay * (2 ** attempt))
+                    continue
+            raise
+    raise last_err
+
+
 # ==========================================
-# 1. KUMPULKAN FAKTA
+# 1. KUMPULKAN FAKTA (SELALU DETERMINISTIK)
 # ==========================================
 
 
@@ -80,14 +134,41 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
-def _rentang(rows: list[dict], mulai: datetime, selesai: datetime) -> list[dict]:
-    """Transaksi dengan mulai <= created_at < selesai."""
-    hasil = []
-    for r in rows:
-        dibuat = _parse_iso(r.get("created_at"))
-        if dibuat and mulai <= dibuat < selesai:
-            hasil.append(r)
-    return hasil
+def _ke_wib(value: Optional[str]) -> Optional[datetime]:
+    """Parse timestamp lalu ubah ke zona WIB. None kalau tidak bisa diparse."""
+    dt = _parse_iso(value)
+    return dt.astimezone(ZONA_WIB) if dt else None
+
+
+def _dalam_periode(
+    nilai: Optional[str],
+    mulai: Optional[datetime],
+    selesai: Optional[datetime],
+) -> bool:
+    """
+    Apakah timestamp ini berada di dalam [mulai, selesai).
+
+    Tanpa batas bawah (mulai=None) semua baris ikut, dipakai untuk periode
+    "semua".
+    """
+    dt = _ke_wib(nilai)
+    if dt is None:
+        return False
+    if mulai is not None and dt < mulai:
+        return False
+    if selesai is not None and dt >= selesai:
+        return False
+    return True
+
+
+def _rentang(
+    rows: list[dict],
+    mulai: Optional[datetime],
+    selesai: Optional[datetime],
+    kolom: str,
+) -> list[dict]:
+    """Baris dengan mulai <= <kolom> < selesai. Keduanya boleh None (tanpa batas)."""
+    return [r for r in rows if _dalam_periode(r.get(kolom), mulai, selesai)]
 
 
 def _omzet(rows: list[dict]) -> int:
@@ -117,53 +198,176 @@ def _persen(n: float) -> str:
     return f"{bulat}%" if float(bulat) == float(n) else f"{n:g}%"
 
 
-def gather_facts(supabase) -> dict[str, Any]:
-    """Hitung semua angka yang dibutuhkan ringkasan. Semua nol aman."""
+def _bulat_ke_bulan(dt: datetime, granularitas: str) -> str:
+    """Kunci bucket untuk grafik, selalu YYYY-MM-DD atau YYYY-MM."""
+    if granularitas == "hari":
+        return dt.date().isoformat()
+    return f"{dt.year:04d}-{dt.month:02d}"
+
+
+def _label_bucket(kunci: str, granularitas: str) -> str:
+    """Label yang enak dibaca buat sumbu grafik: '2026-10-06' -> '6 Okt'."""
+    try:
+        if granularitas == "hari":
+            tgl = datetime.strptime(kunci, "%Y-%m-%d")
+            return f"{tgl.day} {NAMA_BULAN_SINGKAT[tgl.month - 1]}"
+        thn, bln = kunci.split("-")
+        return f"{NAMA_BULAN_SINGKAT[int(bln) - 1]} {thn[2:]}"
+    except (ValueError, IndexError):
+        return kunci
+
+
+def _buat_bucket(
+    mulai: Optional[datetime],
+    selesai: Optional[datetime],
+    granularitas: str,
+    per_hari: dict[str, dict[str, int]],
+) -> list[dict]:
+    """
+    Deret grafik dengan semua bucket terisi, termasuk yang kosong.
+
+    Slot kosong harus ada: kalau hanya bucket yang punya transaksi yang
+    dikirim, sumbu-x menumpuk tanggal dan grafik terlihat miring (mis. 1 Okt
+    lalu langsung 5 Okt) sehingga admin menyimpulkan ada hari tanpa transaksi.
+    """
+    if granularitas == "hari":
+        # Periodenya satu bulan. Bucket harian dibatasi 31 baris, tidak perlu
+        # iterasi per detik.
+        if mulai is None or selesai is None:
+            kunci_urut = sorted(per_hari.keys())
+            return [
+                {
+                    "kunci": k,
+                    "label": _label_bucket(k, "hari"),
+                    "jumlah": per_hari[k]["jumlah"],
+                    "omzet": per_hari[k]["omzet"],
+                }
+                for k in kunci_urut
+            ]
+        hasil = []
+        d = mulai
+        while d < selesai:
+            k = d.date().isoformat()
+            sel = per_hari.get(k, {"jumlah": 0, "omzet": 0})
+            hasil.append({
+                "kunci": k,
+                "label": _label_bucket(k, "hari"),
+                "jumlah": sel["jumlah"],
+                "omzet": sel["omzet"],
+            })
+            d += timedelta(days=1)
+        return hasil
+
+    # Granularitas bulan: satu tahun = 12 bucket, atau seluruh riwayat.
+    if mulai is None:
+        kunci_urut = sorted(per_hari.keys())
+        return [
+            {
+                "kunci": k,
+                "label": _label_bucket(k, "bulan"),
+                "jumlah": per_hari[k]["jumlah"],
+                "omzet": per_hari[k]["omzet"],
+            }
+            for k in kunci_urut
+        ]
+
+    hasil = []
+    thn, bln = mulai.year, mulai.month
+    akhir = selesai  # eksklusif
+    while True:
+        k = f"{thn:04d}-{bln:02d}"
+        if k >= _bulat_akhir(akhir):
+            break
+        sel = per_hari.get(k, {"jumlah": 0, "omzet": 0})
+        hasil.append({
+            "kunci": k,
+            "label": _label_bucket(k, "bulan"),
+            "jumlah": sel["jumlah"],
+            "omzet": sel["omzet"],
+        })
+        bln += 1
+        if bln > 12:
+            bln = 1
+            thn += 1
+    return hasil
+
+
+def _bulat_akhir(dt: datetime) -> str:
+    """Kunci YYYY-MM dari sebuah batas atas eksklusif."""
+    return f"{dt.year:04d}-{dt.month:02d}"
+
+
+def _selesai_ke_periode(dt: datetime, granularitas: str) -> str:
+    """Kunci bucket dari satu timestamp selesai (sudah di zona WIB)."""
+    return _bulat_ke_bulan(dt, granularitas)
+
+
+def gather_facts(
+    supabase,
+    mulai: Optional[datetime] = None,
+    selesai: Optional[datetime] = None,
+    granularitas: str = "hari",
+    label_periode: str = "Semua waktu",
+) -> dict[str, Any]:
+    """
+    Hitung semua angka yang dibutuhkan ringkasan dan grafik.
+
+    Fungsi ini TIDAK pernah memanggil AI. Keluarannya deterministik: dipanggil
+    dua kali dengan data yang sama selalu menghasilkan angka yang sama. Itu
+    yang membuat grafik dan tabel di dashboard bisa dipercaya, sementara
+    narasi AI tetap boleh berubah-ubah kata.
+
+    Parameter `mulai`/`selesai` sudah dalam zona WIB. Kalau keduanya None,
+    periode dianggap "semua" dan grafik memakai bucket bulanan.
+    """
     now = datetime.now(timezone.utc)
-    hari_ini = now - timedelta(days=1)
     minggu_lalu = now - timedelta(days=7)
-    dua_minggu_lalu = now - timedelta(days=14)
     bulan_lalu = now - timedelta(days=30)
 
-    transaksi = (
+    # ---------- transaksi ----------
+    # `selesai_at` ikut diambil karena seluruh laporan omzet memakainya.
+    transaksi = _dengan_retry(lambda: (
         supabase.from_("transactions")
         .select(
-            "id, kode, shoe_id, harga, tech_id, status, created_at, "
+            "id, kode, shoe_id, harga, tech_id, status, created_at, selesai_at, "
             "photo_after, catatan_konsumen, defect_notes"
         )
         .execute().data or []
-    )
-    dengan_sepatu = (
-        supabase.from_("transactions")
-        .select("shoe_id, harga, created_at")
-        .execute().data or []
-    )
-    sepatu = (
+    ))
+    sepatu = _dengan_retry(lambda: (
         supabase.from_("shoes")
-        .select("id, merk, model, harga_cuci, jenis_treatment")
+        .select("id, merk, model")
         .execute().data or []
-    )
-    teknisi = (
+    ))
+    teknisi = _dengan_retry(lambda: (
         supabase.from_("profiles").select("id, full_name").eq("role", "technician").execute().data or []
-    )
-    pelanggan = supabase.from_("profiles").select("id").eq("role", "customer").execute().data or []
-    bahan = (
+    ))
+    pelanggan = _dengan_retry(lambda: (
+        supabase.from_("profiles").select("id").eq("role", "customer").execute().data or []
+    ))
+    bahan = _dengan_retry(lambda: (
         supabase.from_("stock")
         .select("nama_item, jumlah, satuan, batas_minimum")
         .execute().data or []
-    )
-    titik = supabase.from_("drop_points").select("nama, aktif").execute().data or []
+    ))
+    titik = _dengan_retry(lambda: (
+        supabase.from_("drop_points").select("nama, aktif").execute().data or []
+    ))
 
     harga_by_id = {s["id"]: s for s in sepatu}
     nama_teknisi = {t["id"]: t["full_name"] for t in teknisi}
 
-    # --- agregasi per transaksi ---
+    # ---------- agregasi per transaksi ----------
     per_status: dict[str, int] = {s: 0 for s in STATUS_TAHAP}
-    per_hari: dict[str, dict[str, int]] = {}
+    per_bucket: dict[str, dict[str, int]] = {}
     foto_terisi = 0
     catatan_konsumen = 0
     catatan_cacat = 0
     pekerjaan_teknisi: dict[str, int] = {}
+    foto_after_belum = 0
+
+    # Transaksi yang masuk ke periode laporan (selesai di dalam rentang).
+    dalam_periode: list[dict] = []
 
     for r in transaksi:
         status = r.get("status") or ""
@@ -171,6 +375,8 @@ def gather_facts(supabase) -> dict[str, Any]:
             per_status[status] += 1
         if r.get("photo_after"):
             foto_terisi += 1
+        else:
+            foto_after_belum += 1
         if r.get("catatan_konsumen"):
             catatan_konsumen += 1
         if r.get("defect_notes"):
@@ -180,39 +386,50 @@ def gather_facts(supabase) -> dict[str, Any]:
         if tech_id:
             pekerjaan_teknisi[tech_id] = pekerjaan_teknisi.get(tech_id, 0) + 1
 
-        dibuat = _parse_iso(r.get("created_at"))
-        if dibuat:
-            kunci = dibuat.astimezone(timezone.utc).date().isoformat()
-            sel = per_hari.setdefault(kunci, {"jumlah": 0, "omzet": 0})
+        # Transaksi lama sering sudah masuk status final (Selesai / Siap diambil)
+        # tapi belum punya `selesai_at`; untuk dashboard, fallback ke created_at
+        # supaya angka riwayat masih tampil tanpa mengubah arti bisnis.
+        selesai_terpakai = r.get("selesai_at") or (
+            r.get("created_at") if status in STATUS_FINAL else None
+        )
+        dt_selesai = _ke_wib(selesai_terpakai)
+        if dt_selesai and _dalam_periode(selesai_terpakai, mulai, selesai):
+            dalam_periode.append(r)
+            kunci = _selesai_ke_periode(dt_selesai, granularitas)
+            sel = per_bucket.setdefault(kunci, {"jumlah": 0, "omzet": 0})
             sel["jumlah"] += 1
             sel["omzet"] += r.get("harga") or 0
 
-    # --- layanan terlaris, 7 hari terakhir ---
+    # ---------- layanan terlaris dalam periode ----------
     per_layanan: dict[str, int] = {}
     per_layanan_omzet: dict[str, int] = {}
-    for r in _rentang(dengan_sepatu, minggu_lalu, now):
+    for r in dalam_periode:
         s = harga_by_id.get(r.get("shoe_id"))
         if not s:
             continue
-        label = " ".join(x for x in [s.get("merk"), s.get("model")] if x) or "Tanpa nama"
-        per_layanan[label] = per_layanan.get(label, 0) + 1
-        per_layanan_omzet[label] = per_layanan_omzet.get(label, 0) + (r.get("harga") or 0)
+        lbl = " ".join(x for x in [s.get("merk"), s.get("model")] if x) or "Tanpa nama"
+        per_layanan[lbl] = per_layanan.get(lbl, 0) + 1
+        per_layanan_omzet[lbl] = per_layanan_omzet.get(lbl, 0) + (r.get("harga") or 0)
 
-    # --- periode ---
-    seit = {
-        "7h": _rentang(transaksi, minggu_lalu, now),
-        "30h": _rentang(transaksi, bulan_lalu, now),
-        "7h_lalu": _rentang(transaksi, dua_minggu_lalu, minggu_lalu),
-    }
+    # ---------- pembanding untuk growth ----------
+    # Bandingkan periode terpilih dengan periode sepanjang durasi yang sama
+    # yang langsung sebelumnya. Ini yang membuat "Omzet naik 12% dibanding
+    # periode sebelumnya" bermakna baik untuk bulan maupun untuk tahun.
+    pembanding = _periode_sebelumnya(mulai, selesai)
+    if pembanding is not None:
+        lalu = _rentang(transaksi, pembanding[0], pembanding[1], "selesai_at")
+    else:
+        lalu = []
 
-    # --- grafik 14 hari, hari kosong tetap 0 agar sumbu-x tidak bolong ---
-    grafik = []
-    for i in range(13, -1, -1):
-        hari = (now - timedelta(days=i)).date().isoformat()
-        sel = per_hari.get(hari, {"jumlah": 0, "omzet": 0})
-        grafik.append({"tanggal": hari, "jumlah": sel["jumlah"], "omzet": sel["omzet"]})
+    # ---------- pembanding mingguan (dipakai untuk kartu info tambahan) ----------
+    seit_7h = _rentang(transaksi, minggu_lalu, now, "selesai_at")
+    seit_30h = _rentang(transaksi, bulan_lalu, now, "selesai_at")
 
-    # --- stok kritis ---
+    grafik = _buat_bucket(mulai, selesai, granularitas, per_bucket)
+
+    # ---------- stok kritis (selalu "sekarang", bukan periode) ----------
+    # Stok tidak punya tanggal, jadi tidak bisa difilter per bulan. Menampilkannya
+    # sebagai kondisi saat ini -- bukan kondisi bulan lalu -- memang yang benar.
     kritis = [
         {
             "nama": b.get("nama_item"),
@@ -225,12 +442,12 @@ def gather_facts(supabase) -> dict[str, Any]:
     ]
     kritis.sort(key=lambda x: (x["sisa"] - x["minimum"]))
 
-    # --- pekerjaan tertahan: belum final dan sudah lewat 2 hari ---
+    # ---------- pekerjaan tertahan (antrean, selalu "sekarang") ----------
     tertahan = []
     for r in transaksi:
         if (r.get("status") or "") in STATUS_FINAL:
             continue
-        dibuat = _parse_iso(r.get("created_at"))
+        dibuat = _ke_wib(r.get("created_at"))
         if not dibuat:
             continue
         umur = (now - dibuat).days
@@ -246,19 +463,46 @@ def gather_facts(supabase) -> dict[str, Any]:
     terlaris = sorted(per_layanan.items(), key=lambda x: x[1], reverse=True)[:5]
     termahal = sorted(per_layanan_omzet.items(), key=lambda x: x[1], reverse=True)[:5]
 
+    omzet_periode = _omzet(dalam_periode)
+    komisi_periode = sum(r.get("tech_commission") or 0 for r in dalam_periode)
+
     return {
         "dihitung_pada": now.isoformat(),
+        "periode": {
+            "label": label_periode,
+            "granularitas": granularitas,
+            "mulai": mulai.isoformat() if mulai else None,
+            "selesai": selesai.isoformat() if selesai else None,
+        },
+
+        # --- angka periode (semua dari selesai_at) ---
+        "transaksi_periode": len(dalam_periode),
+        "omzet_periode": omzet_periode,
+        "komisi_periode": komisi_periode,
+        "laba_outlet_periode": omzet_periode - komisi_periode,
         "total_transaksi": len(transaksi),
         "omzet_total": _omzet(transaksi),
+        "grafik": grafik,
+        "tren_harian": grafik if granularitas == "hari" else [],
+        "perubahan_omzet_persen": _growth(dalam_periode, lalu),
+        "periode_lalu_omzet": _omzet(lalu),
+
+        # --- pembanding bergulir (dipakai untuk kartu info) ---
+        "transaksi_7h": len(seit_7h),
+        "omzet_7h": _omzet(seit_7h),
+        "transaksi_30h": len(seit_30h),
+        "omzet_30h": _omzet(seit_30h),
+        "transaksi_masih_jalan": sum(per_status.get(s, 0) for s in STATUS_AWAL),
+        "transaksi_sudah_selesai": per_status.get("Selesai", 0) + per_status.get("Siap diambil", 0),
+
+        # --- status (selalu seluruh riwayat, bukan periode) ---
         "per_status": per_status,
-        "transaksi_7h": len(seit["7h"]),
-        "transaksi_30h": len(seit["30h"]),
-        "omzet_7h": _omzet(seit["7h"]),
-        "omzet_30h": _omzet(seit["30h"]),
-        "perubahan_omzet_persen": _growth(seit["7h"], seit["7h_lalu"]),
-        "tren_harian": grafik,
+
+        # --- layanan ---
         "layanan_terlaris": [{"nama": n, "jumlah": c} for n, c in terlaris],
         "layanan_omzet_tertinggi": [{"nama": n, "omzet": c} for n, c in termahal],
+
+        # --- orang ---
         "jumlah_teknisi": len(teknisi),
         "pekerjaan_per_teknisi": [
             {"nama": nama_teknisi.get(tid, "Tidak dikenal"), "jumlah": c}
@@ -266,16 +510,35 @@ def gather_facts(supabase) -> dict[str, Any]:
         ],
         "jumlah_pelanggan": len(pelanggan),
         "jumlah_drop_point_aktif": len([p for p in titik if p.get("aktif", True)]),
+
+        # --- stok & antrean (kondisi saat ini) ---
         "jumlah_stok_kritis": len(kritis),
         "stok_kritis": kritis[:8],
         "jumlah_tertahan": len(tertahan),
         "pekerjaan_tertahan": tertahan[:8],
-        "transaksi_sudah_selesai": per_status.get("Selesai", 0) + per_status.get("Siap diambil", 0),
-        "transaksi_masih_jalan": sum(per_status.get(s, 0) for s in STATUS_AWAL),
+
+        # --- kualitas input ---
         "foto_after_terisi": foto_terisi,
+        "foto_after_belum": foto_after_belum,
         "catatan_konsumen_ada": catatan_konsumen,
         "catatan_cacat_ada": catatan_cacat,
     }
+
+
+def _periode_sebelumnya(
+    mulai: Optional[datetime], selesai: Optional[datetime]
+) -> Optional[tuple[datetime, datetime]]:
+    """
+    Periode sepanjang durasi yang sama, tepat sebelum `mulai`.
+
+    Untuk bulan -> bulan sebelumnya. Untuk tahun -> tahun sebelumnya.
+    Kalau `mulai` None (periode "semua"), tidak ada pembanding yang masuk akal
+    sehingga None dikembalikan dan growth dihitung sebagai None.
+    """
+    if mulai is None or selesai is None:
+        return None
+    durasi = selesai - mulai
+    return (mulai - durasi, mulai)
 
 
 # ==========================================
@@ -293,30 +556,47 @@ def rule_based_summary(f: dict[str, Any]) -> str:
             "omzet, layanan terlaris, dan catatan stok yang perlu disiapkan."
         )
 
+    label = f["periode"]["label"]
     ps = f["per_status"]
     bagian: list[str] = []
 
-    # --- kondisi umum ---
-    skel = (
-        f"Selama 7 hari terakhir tercatat {f['transaksi_7h']} transaksi senilai "
-        f"{_ribuan(f['omzet_7h'])}. Dalam 30 hari, {f['transaksi_30h']} transaksi "
-        f"senilai {_ribuan(f['omzet_30h'])}. Total sejak sistem dipakai: "
-        f"{total} transaksi atau {_ribuan(f['omzet_total'])}."
-    )
+    # --- kondisi periode terpilih ---
+    n_periode = f["transaksi_periode"]
+    if n_periode == 0:
+        skel = (
+            f"Belum ada pekerjaan yang selesai pada {label}, jadi belum ada omzet "
+            "yang bisa dilaporkan untuk periode ini."
+        )
+    else:
+        skel = (
+            f"Pada {label} tercatat {n_periode} pekerjaan selesai dengan omzet "
+            f"{_ribuan(f['omzet_periode'])}. Dari angka itu, komisi teknisi "
+            f"{_ribuan(f['komisi_periode'])} dan sisa untuk outlet "
+            f"{_ribuan(f['laba_outlet_periode'])}."
+        )
 
     growth = f.get("perubahan_omzet_persen")
     if growth is None:
         skel += (
-            " Perbandingan dengan minggu sebelumnya belum bisa dihitung karena "
+            " Perbandingan dengan periode sebelumnya belum bisa dihitung karena "
             "periode pembandingnya masih kosong."
         )
     elif growth > 0:
-        skel += f" Omzet naik {_persen(growth)} dibanding 7 hari sebelumnya."
+        skel += f" Omzet naik {_persen(growth)} dibanding periode sebelumnya."
     elif growth < 0:
-        skel += f" Omzet turun {_persen(abs(growth))} dibanding 7 hari sebelumnya, ini yang perlu dicek."
+        skel += f" Omzet turun {_persen(abs(growth))} dibanding periode sebelumnya, ini yang perlu dicek."
     else:
-        skel += " Omzet tetap sama dengan 7 hari sebelumnya."
+        skel += " Omzet sama dengan periode sebelumnya."
     bagian.append(skel)
+
+    # --- pembanding bergulir (supaya ada konteks walau periode-nya sepi) ---
+    if f["transaksi_7h"] or f["transaksi_30h"]:
+        bagian.append(
+            f"Sebagai pembanding, 7 hari terakhir ada {f['transaksi_7h']} pekerjaan "
+            f"senilai {_ribuan(f['omzet_7h'])}, dan 30 hari terakhir "
+            f"{f['transaksi_30h']} pekerjaan {_ribuan(f['omzet_30h'])}. "
+            f"Total sejak sistem dipakai: {total} pekerjaan."
+        )
 
     # --- antrean kerja ---
     jalan = f["transaksi_masih_jalan"]
@@ -332,18 +612,18 @@ def rule_based_summary(f: dict[str, Any]) -> str:
     if f["layanan_terlaris"]:
         top = f["layanan_terlaris"][0]
         if f["layanan_omzet_tertinggi"]:
-            paling_raut = f["layanan_omzet_tertinggi"][0]
-            if paling_raut["nama"] == top["nama"]:
+            paling_omzet = f["layanan_omzet_tertinggi"][0]
+            if paling_omzet["nama"] == top["nama"]:
                 bagian.append(
-                    f"Layanan yang paling sering dipesan 7 hari terakhir sekaligus "
+                    f"Layanan yang paling sering dipesan pada {label} sekaligus "
                     f"penyumbang omzet terbesar adalah {top['nama']}, dengan "
-                    f"{top['jumlah']} kali pesan senilai {_ribuan(paling_raut['omzet'])}."
+                    f"{top['jumlah']} kali pesan senilai {_ribuan(paling_omzet['omzet'])}."
                 )
             else:
                 bagian.append(
-                    f"Layanan yang paling sering dipesan 7 hari terakhir adalah {top['nama']} "
+                    f"Layanan yang paling sering dipesan pada {label} adalah {top['nama']} "
                     f"({top['jumlah']} kali), tapi penyumbang omzet terbesar justru "
-                    f"{paling_raut['nama']} dengan {_ribuan(paling_raut['omzet'])}. Jadi "
+                    f"{paling_omzet['nama']} dengan {_ribuan(paling_omzet['omzet'])}. Jadi "
                     "pemesanan terbanyak tidak otomatis jadi penyumbang omzet terbesar."
                 )
         else:
@@ -379,7 +659,7 @@ def rule_based_summary(f: dict[str, Any]) -> str:
         nama = ", ".join(s["nama"] for s in f["stok_kritis"][:3] if s.get("nama"))
         tindakan.append(f"{f['jumlah_stok_kritis']} bahan menyentuh batas minimum ({nama})")
     if tindakan:
-        bagian.append("Yang perlu ditindak: " + ", lalu ".join(tindakan) + ".")
+        bagian.append("Yang perlu ditindak: " + "; ".join(tindakan) + ".")
 
     # --- kualitas input (informasi, bukan teguran) ---
     catatan = []
@@ -396,32 +676,124 @@ def rule_based_summary(f: dict[str, Any]) -> str:
     return " ".join(p for p in bagian if p)
 
 
+def rule_based_saran(f: dict[str, Any]) -> list[str]:
+    """
+    Saran deterministik. Mengembalikan daftar string (bisa kosong).
+
+    Dipisah dari ringkasan supaya frontend bisa menampilkannya sebagai daftar
+    berpoin, bukan paragraf. Bentuknya harus sama dengan output AI supaya
+    frontend tidak perlu tahu sumber mana yang dipakai.
+    """
+    saran: list[str] = []
+
+    # 1. Stok kritis -- yang paling konkret dan bisa langsung ditindak.
+    if f["jumlah_stok_kritis"]:
+        nama = ", ".join(s["nama"] for s in f["stok_kritis"][:3] if s.get("nama"))
+        saran.append(f"Segera beli {nama} sebelum kehabisan. Ini yang paling cepat jadi masalah.")
+
+    # 2. Pekerjaan lama.
+    if f["jumlah_tertahan"]:
+        paling = f["pekerjaan_tertahan"][0]
+        saran.append(
+            f"Tinjau {paling['kode']} yang sudah {paling['umur_hari']} hari di tahap "
+            f"{paling['status']}. Cek apakah ada yang menghambat, atau jadwalkan ulang."
+        )
+
+    # 3. Beban kerja tidak seimbang.
+    if f["pekerjaan_per_teknisi"]:
+        beban = f["pekerjaan_per_teknisi"][0]
+        sisa = f["jumlah_teknisi"] - 1
+        if sisa > 0:
+            saran.append(
+                f"Sebagian besar kerjaan ada di {beban['nama']} ({beban['jumlah']} pekerjaan). "
+                "Bagikan ke teknisi lain supaya waktu tunggunya lebih seimbang."
+            )
+
+    # 4. Tren turun.
+    growth = f.get("perubahan_omzet_persen")
+    if growth is not None and growth < -10:
+        saran.append(
+            f"Omzet turun {_persen(abs(growth))} dibanding periode sebelumnya. "
+            "Cek apakah karena musim sepi, layanan yang dulu ramai hilang, atau ada pesaing."
+        )
+
+    # 5. Burst naik -- siapkan stok dan kapasitas.
+    if growth is not None and growth > 20:
+        saran.append(
+            f"Omzet naik {_persen(growth)}. Pastikan stok bahan dan jam kerja teknisi masih cukup."
+        )
+
+    # 6. Kualitas dokumentasi.
+    if f["foto_after_belum"] and f["jumlah_tertahan"]:
+        saran.append(
+            "Beberapa pekerjaan lama belum punya foto setelah. Minta teknisi lengkapi "
+            "supaya aman kalau ada klaim."
+        )
+
+    # 7. Periode sepi.
+    if f["transaksi_periode"] == 0 and f["total_transaksi"] > 0:
+        saran.append(
+            "Belum ada pekerjaan selesai di periode ini. Kalau bukan karena sepi, "
+            "periksa juga apakah teknisi sudah menandai status Selesai."
+        )
+
+    return saran
+
+
 # ==========================================
-# 3. OPENROUTER (opsional)
+# 3. OPENROUTER (opsional, HANYA narasi + saran)
 # ==========================================
 
 SYSTEM_PROMPT = """Kamu adalah analis operasional untuk bisnis cuci sepatu \
 yang beralamat di Jl. Cisadane No.3, Singonegaran, Banyuwangi. Kamu \
-menerima data agregat (angka, bukan data pribadi) dan menulis ringkasan \
-bisnis dalam Bahasa Indonesia yang lugas dan praktis.
+menerima data agregat (angka, bukan data pribadi).
 
-Aturan:
-- Maksimal 5 paragraf pendek.
-- Semua nominal rupiah ditulis seperti "Rp 350.000".
-- Sebutkan temuan konkret dari data. Jangan kalimat umum yang bisa ditulis tanpa data.
-- Beri 2 sampai 4 rekomendasi tindakan yang bisa langsung dikerjakan pemilik.
-- Jangan mengarang angka yang tidak ada di data. Kalau datanya kurang, katakan begitu.
-- Jangan menyebut kode transaksi, nomor telepon, atau nama orang secara spesifik.
-- Gaya: seperti pemilik toko yang sudah biasa baca data, bukan bahasa korporat."""
+Tugasmu HANYA dua hal:
+1. RINGKASAN: maksimal 4 paragraf pendek tentang apa yang terjadi di \
+   periode ini.
+2. SARAN: 2 sampai 4 rekomendasi tindakan konkret yang bisa langsung \
+   dikerjakan pemilik.
+
+Yang TIDAK boleh kamu lakukan:
+- Menghitung ulang atau mengarang angka. Semua angka sudah dihitung sistem; \
+  cukup mengutip angka yang ada di data.
+- Menyebut kode transaksi, nomor telepon, atau nama orang.
+- Memberi saran di luar data (misal membuka cabang baru) kecuali kamu \
+  menyatakan jelas bahwa itu di luar jangkauan data.
+
+Gaya: seperti pemilik toko yang sudah biasa baca data, bukan bahasa korporat.
+Semua nominal rupiah ditulis seperti "Rp 350.000".
+
+Balas HANYA dengan JSON valid, tanpa teks lain, dengan bentuk persis:
+{"ringkasan": "paragraf 1\n\nparagraf 2", "saran": ["saran 1", "saran 2"]}"""
 
 
-def openrouter_summary(facts: dict[str, Any], api_key: str, model: str) -> Optional[str]:
-    """Panggil OpenRouter. Kembalikan None kalau gagal dalam bentuk apa pun."""
+def openrouter_insight(
+    facts: dict[str, Any], api_key: str, model: str
+) -> Optional[tuple[str, list[str]]]:
+    """
+    Panggil OpenRouter untuk (ringkasan, saran).
+
+    Kembalikan None kalau gagal dalam bentuk apa pun -- biarkan
+    `rule_based_*` yang pakai. Tidak ada retries: kalau model gratis sedang
+    lambat, menunggu 45 detik untuk setiap pembukaan dashboard adalah
+    pengalaman yang buruk.
+    """
     if not api_key:
         return None
 
-    # Jangan kirim seluruh katalog: hanya angka agregat yang relevan.
+    # Jangan kirim seluruh facts: hanya angka agregat yang relevan.
     untuk_ai = {k: v for k, v in facts.items() if k != "dihitung_pada"}
+
+    # Daftar panjang dan teks panjang dipangkas supaya tidak menghabiskan token
+    # dan supaya model lebih fokus ke angka ringkasnya.
+    untuk_ai.pop("stok_kritis", None)
+    untuk_ai.pop("pekerjaan_tertahan", None)
+    untuk_ai.pop("grafik", None)
+    untuk_ai.pop("tren_harian", None)
+
+    label = facts.get("periode", {}).get("label", "periode terpilih")
+
     body = {
         "model": model,
         "messages": [
@@ -429,7 +801,8 @@ def openrouter_summary(facts: dict[str, Any], api_key: str, model: str) -> Optio
             {
                 "role": "user",
                 "content": (
-                    "Data operasional 14 hari terakhir:\n\n"
+                    f"Periode laporan: {label}\n\n"
+                    "Data agregat:\n\n"
                     + json.dumps(untuk_ai, ensure_ascii=False, indent=2)
                 ),
             },
@@ -455,13 +828,66 @@ def openrouter_summary(facts: dict[str, Any], api_key: str, model: str) -> Optio
             hasil = json.loads(resp.read().decode("utf-8"))
         teks = hasil["choices"][0]["message"]["content"] or ""
         teks = _buang_pemikiran(teks)
-        return teks or None
+        return _urai_json(teks)
     except Exception:
         # 429 (kuota model gratis habis), 403 (key tak punya akses model),
         # 404 (model sudah dihapus dari katalog), timeout, HTML dari proxy,
         # atau JSON aneh. Semuanya normal dan wajar, bukan bug -- jadi diamkan
-        # saja dan biar ringkasan rule-based yang dipakai.
+        # saja dan biarkan ringkasan rule-based yang dipakai.
         return None
+
+
+def _urai_json(teks: str) -> Optional[tuple[str, list[str]]]:
+    """
+    Parse balasan model jadi (ringkasan, saran).
+
+    Model gratis tidak selalu mengembalikan JSON murni.
+    Sebagian membungkus dengan pagar ```json, sebagian mendahului dengan
+    "Here is the JSON:". Jadi: coba parse apa adanya; kalau gagal, ambil
+    objek JSON pertama yang kurung kurawalnya seimbang.
+    """
+    teks = (teks or "").strip()
+    if not teks:
+        return None
+
+    kandidat = [teks]
+
+    # Buang pagar kode kalau ada.
+    pagar = re.search(r"```(?:json)?\s*(.*?)```", teks, re.DOTALL)
+    if pagar:
+        kandidat.append(pagar.group(1).strip())
+
+    # Cari objek JSON pertama yang seimbang.
+    awal = teks.find("{")
+    if awal >= 0:
+        depth = 0
+        for i in range(awal, len(teks)):
+            if teks[i] == "{":
+                depth += 1
+            elif teks[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    kandidat.append(teks[awal : i + 1])
+                    break
+
+    for k in kandidat:
+        try:
+            obj = json.loads(k)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        ringkasan = obj.get("ringkasan") or obj.get("summary") or ""
+        saran = obj.get("saran") or obj.get("suggestions") or []
+        if isinstance(saran, str):
+            saran = [baris.strip("- ").strip() for baris in saran.split("\n") if baris.strip()]
+        if isinstance(saran, list):
+            saran = [str(s).strip() for s in saran if str(s).strip()]
+        else:
+            saran = []
+        if ringkasan:
+            return _buang_pemikiran(str(ringkasan).strip()), saran[:5]
+    return None
 
 
 # ==========================================
@@ -469,17 +895,38 @@ def openrouter_summary(facts: dict[str, Any], api_key: str, model: str) -> Optio
 # ==========================================
 
 
-def build_summary(supabase) -> dict[str, Any]:
-    facts = gather_facts(supabase)
+def build_summary(
+    supabase,
+    mulai: Optional[datetime] = None,
+    selesai: Optional[datetime] = None,
+    granularitas: str = "hari",
+    label_periode: str = "Semua waktu",
+) -> dict[str, Any]:
+    """
+    Ringkasan + saran (AI atau fallback), disertai fakta untuk grafik.
+
+    Kontrak penting: `fakta` SELALU hasil perhitungan lokal, apa pun yang
+    terjadi pada pemanggilan AI. Frontend menggambar grafik dari `fakta`,
+    jadi grafik tidak pernah berubah karena alasan bahasa.
+    """
+    facts = gather_facts(
+        supabase,
+        mulai=mulai,
+        selesai=selesai,
+        granularitas=granularitas,
+        label_periode=label_periode,
+    )
 
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     model = os.getenv("OPENROUTER_MODEL", "").strip() or DEFAULT_MODEL
 
     if api_key:
-        teks = openrouter_summary(facts, api_key, model)
-        if teks:
+        hasil = openrouter_insight(facts, api_key, model)
+        if hasil:
+            ringkasan, saran = hasil
             return {
-                "ringkasan": teks,
+                "ringkasan": ringkasan,
+                "saran": saran,
                 "sumber": "ai",
                 "model": model,
                 "catatan": None,
@@ -487,16 +934,18 @@ def build_summary(supabase) -> dict[str, Any]:
             }
         alasan = (
             "Layanan AI sedang tidak tersedia (kuota model gratis habis, timeout, "
-            "atau API key ditolak). Ringkasan di bawah dihitung dari data langsung."
+            "atau API key ditolak). Ringkasan dan saran di bawah dihitung dari "
+            "data langsung."
         )
     else:
         alasan = (
-            "OPENROUTER_API_KEY belum diisi di .env, jadi ringkasan di bawah "
-            "dihitung dari data langsung tanpa AI."
+            "OPENROUTER_API_KEY belum diisi di .env, jadi ringkasan dan saran "
+            "di bawah dihitung dari data langsung tanpa AI."
         )
 
     return {
         "ringkasan": rule_based_summary(facts),
+        "saran": rule_based_saran(facts),
         "sumber": "fallback",
         "model": None,
         "catatan": alasan,

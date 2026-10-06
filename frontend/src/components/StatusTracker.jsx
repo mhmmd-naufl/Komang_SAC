@@ -20,8 +20,8 @@ const mockTransactions = [
     id: 'KS-2401A',
     status: 'Diproses',
     created_at: '2026-10-04T09:12:00Z',
-    shoes: { merk: 'Nike', model: 'Air Force 1', jenis_treatment: 'Premium' },
-    harga: 35000,
+    shoes: { merk: 'Deep Cleaning', model: 'White', jenis_treatment: 'Deep Cleaning' },
+    harga: 30000,
     drop_point: { nama: 'Outlet Utama', alamat: 'Jl. Cisadane No.3, Banyuwangi' },
     catatan_konsumen: 'Tolong jaga warna putih tetap bersih.',
   },
@@ -29,8 +29,8 @@ const mockTransactions = [
     id: 'KS-2401B',
     status: 'Siap diambil',
     created_at: '2026-10-01T14:40:00Z',
-    shoes: { merk: 'Adidas', model: 'Ultraboost', jenis_treatment: 'Steri' },
-    harga: 40000,
+    shoes: { merk: 'Shoes Repaint', model: 'Upper Suede', jenis_treatment: 'Shoes Repaint' },
+    harga: 100000,
     drop_point: { nama: 'Dolay Cut', alamat: 'Jl. Kyai Haji Wahid Hasyim No.76' },
     catatan_konsumen: null,
   },
@@ -166,6 +166,16 @@ export default function StatusTracker() {
                 <p className="text-slate-500 text-xs">Masuk</p>
                 <p className="font-medium flex items-center gap-1.5">
                   <Calendar className="h-3.5 w-3.5 text-slate-400" /> {formatDateTime(result.created_at)}
+                </p>
+              </div>
+              {/* Tanggal selesai dicatat teknisi saat status jadi Selesai. Konsumen
+                  butuh ini untuk tahu kapan cuciannya rampung, jadi sengaja
+                  ikut ke halaman publik. */}
+              <div>
+                <p className="text-slate-500 text-xs">Selesai</p>
+                <p className="font-medium flex items-center gap-1.5">
+                  <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                  {result.selesai_at ? formatDateTime(result.selesai_at) : 'Belum selesai'}
                 </p>
               </div>
               <div>

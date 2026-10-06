@@ -3,7 +3,7 @@
 -- Jalankan di Supabase SQL Editor. Aman diulang (IF NOT EXISTS).
 -- -------------------------------------------------------------
 -- Menambahkan kolom yang dipakai main.py tapi belum ada:
---   transactions : kode, defect_notes, photo_before, photo_after, updated_at
+--   transactions : kode, defect_notes, photo_before, photo_after, updated_at, selesai_at
 --   stock        : last_updated
 --   profiles     : password_hash
 -- =============================================================
@@ -17,6 +17,18 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS defect_notes TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS photo_before TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS photo_after TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+-- Tanggal selesai dicatat teknisi saat status jadi Selesai. Dipakai untuk
+-- laporan per bulan/tahun: cucian dihitung masuk periode tanggal SELESAI-nya.
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS selesai_at TIMESTAMPTZ;
+
+-- Backfill data lama: transaksi yang sudah final tapi belum punya tanggal
+-- selesai masih harus ikut dihitung di dashboard dengan created_at sebagai
+-- fallback, supaya data historis tidak menghilang saat migrasi.
+UPDATE transactions
+SET selesai_at = created_at
+WHERE status IN ('Selesai', 'Siap diambil')
+  AND selesai_at IS NULL
+  AND created_at IS NOT NULL;
 
 -- ---------- [3] transactions: trigger updated_at ----------
 CREATE OR REPLACE FUNCTION touch_updated_at()
@@ -34,13 +46,66 @@ CREATE TRIGGER trg_transactions_updated_at
 
 -- ---------- [4] transactions: index untuk tracking ----------
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trx_kode ON transactions (kode) WHERE kode IS NOT NULL;
+-- Index untuk laporan per bulan/tahun.
+CREATE INDEX IF NOT EXISTS idx_trx_selesai_at ON transactions (selesai_at);
 
 -- ---------- [5] stock: last_updated ----------
 ALTER TABLE stock ADD COLUMN IF NOT EXISTS last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE stock ADD COLUMN IF NOT EXISTS created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 -- =============================================================
--- [6] ISI DATA AWAL (idempoten — aman dijalankan berulang)
+-- [6] shoes: DAFTAR HARGA ASLI + RENTANG HARGA
+-- -------------------------------------------------------------
+-- Tabel `shoes` berubah fungsi: sekarang satu baris = satu VARIAN LAYANAN
+-- (bukan satu merk sepatu), karena Komang SAC selling by jenis treatment.
+-- Karena itu jenis_treatment harus bisa menyimpan nilai apa saja
+-- (Deep Cleaning, Unyellowing, Repaint, ...), bukan cuma 4 enum lama.
+--
+-- Cek constraint Postgres TIDAK punya "IF NOT EXISTS", jadi pola yang dipakai
+-- di sini: DROP dulu (aman, `IF EXISTS`), baru ADD. Aman diulang.
+-- =============================================================
+
+ALTER TABLE shoes ADD COLUMN IF NOT EXISTS harga_min  INTEGER;
+ALTER TABLE shoes ADD COLUMN IF NOT EXISTS harga_max  INTEGER;
+ALTER TABLE shoes ADD COLUMN IF NOT EXISTS kelompok   TEXT;
+
+-- Baris lama belum punya harga_min -> samakan dengan harga_cuci supaya
+-- transaksi yang dibuat dari layanan lama tidak mengambil harga NULL.
+UPDATE shoes SET harga_min = harga_cuci WHERE harga_min IS NULL;
+
+-- Buang constraint enum lama (Standar|Premium|Steri|Waterproof). Kalau nama
+-- constraint-nya berbeda, blok di bawah tidak error, hanya dilewati.
+ALTER TABLE shoes DROP CONSTRAINT IF EXISTS shoes_jenis_treatment_check;
+
+-- Pola terbuka: huruf/angka/spasi, maks 40 karakter. Admin bisa menambah
+-- layanan baru dari panel tanpa perlu ALTER TABLE.
+ALTER TABLE shoes DROP CONSTRAINT IF EXISTS shoes_jenis_treatment_check;
+ALTER TABLE shoes
+    ADD CONSTRAINT shoes_jenis_treatment_check CHECK (
+        jenis_treatment IS NULL OR
+        jenis_treatment ~ '^[A-Za-z][A-Za-z0-9 &/.,()-]{0,40}$'
+    );
+
+ALTER TABLE shoes DROP CONSTRAINT IF EXISTS shoes_kelompok_check;
+ALTER TABLE shoes
+    ADD CONSTRAINT shoes_kelompok_check CHECK (
+        kelompok IS NULL OR kelompok ~ '^[A-Za-z][A-Za-z0-9 &/,.-]{0,60}$'
+    );
+
+ALTER TABLE shoes DROP CONSTRAINT IF EXISTS shoes_harga_rentang_check;
+ALTER TABLE shoes
+    ADD CONSTRAINT shoes_harga_rentang_check CHECK (
+        harga_min IS NULL OR harga_max IS NULL OR harga_max >= harga_min
+    );
+
+CREATE INDEX IF NOT EXISTS idx_shoes_kelompok ON shoes (kelompok);
+
+-- =============================================================
+-- [7] ISI DATA AWAL (idempoten — aman dijalankan berulang)
+-- -------------------------------------------------------------
+-- CATATAN: daftar harga asli Komang SAC (3 kelompok, ~27 varian) TIDAK
+-- ditulis di sini. Jalankan `seed_pricelist.py` supaya bisa pakai update
+-- atau skip per baris. SQL Editor tidak bisa mengulang baris dengan id tetap.
 -- =============================================================
 
 -- Drop point
@@ -71,7 +136,7 @@ SELECT * FROM (VALUES
 WHERE NOT EXISTS (SELECT 1 FROM stock WHERE stock.nama_item = v.nama_item);
 
 -- =============================================================
--- [7] RLS (opsional — JANGAN aktifkan sebelum backend pakai
+-- [8] RLS (opsional — JANGAN aktifkan sebelum backend pakai
 --     service-role key, atau semua request dari frontend akan 401)
 -- =============================================================
 -- ALTER TABLE profiles     ENABLE ROW LEVEL SECURITY;

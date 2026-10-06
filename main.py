@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, HTTPException, status, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List, Callable
 from supabase import create_client, Client
 import jwt
@@ -101,25 +101,83 @@ security = HTTPBearer(auto_error=False)
 # PYDANTIC MODELS (VALIDASI DATA)
 # ==========================================
 
-# --- Shoes (Master Sepatu & Treatment) ---
+# --- Shoes (Master Layanan / Price List) ---
+# POLA treatment sengaja TIDAK memakai enum. Daftar layanan Komang SAC
+# (Deep Cleaning, Unyellowing, Repaint, Reglue, Bag Cleaning, Helmet, ...)
+# terus bertambah dan admin harus bisa menambah yang baru dari panel tanpa
+# perlu ALTER TABLE. Yang dijaga hanya bentuknya: huruf/angka/spasi, maks 40.
+# Kolomnya mempolakan CHECK constraint di migrate.sql bagian [6].
+POLA_TREATMENT = r"^[A-Za-z][A-Za-z0-9 &/.,()\-]{0,40}$"
+POLA_KELOMPOK = r"^[A-Za-z][A-Za-z0-9 &/,.\-]{0,60}$"
+
+# Tiga kelompok katalog sesuai daftar harga resmi. Dipakai seed script dan
+# sebagai opsi dropdown di panel admin, tapi TIDAK dipaksa di database supaya
+# admin tetap bisa menambah kelompok baru sendiri.
+KELOMPOK_KATALOG = [
+    "Cuci Sepatu",
+    "Bag, Hat & Helmet",
+    "Repaint & Reglue",
+]
+
+
 class ShoeBase(BaseModel):
+    """
+    Satu baris = satu varian layanan, bukan satu merk sepatu.
+
+    - `harga_cuci` = harga tetap untuk layanan yangtoharga tunggal
+      (mis. Deep Cleaning White 30.000).
+    - `harga_min`/`harga_max` = rentang. Transaksi dicatat dari harga_min dan
+      harga akhirnya dikonfirmasi admin di outlet lewat endpoint finalisasi
+      harga. Kalau rentang diisi, harga_cuci tetap ikut diisi dengan harga_min
+      supaya kolom lama (yang dipakai booking) selalu punya angka.
+    """
     merk: str
     model: Optional[str] = None
     harga_cuci: int
-    jenis_treatment: Optional[str] = Field(None, pattern="^(Standar|Premium|Steri|Waterproof)$")
+    harga_min: Optional[int] = Field(None, ge=0)
+    harga_max: Optional[int] = Field(None, ge=0)
+    kelompok: Optional[str] = Field(None, pattern=POLA_KELOMPOK)
+    jenis_treatment: Optional[str] = Field(None, pattern=POLA_TREATMENT)
     keterangan_treatment: Optional[str] = None
     status: bool = True
 
+    @model_validator(mode="after")
+    def _cek_rentang(self) -> "ShoeBase":
+        # harga_max < harga_min hampir selalu salah input, dan kalau lolos ke
+        # database akan tampil sebagai "Rp160.000 - Rp120.000" di katalog.
+        if (
+            self.harga_min is not None
+            and self.harga_max is not None
+            and self.harga_max < self.harga_min
+        ):
+            raise ValueError("harga_max tidak boleh lebih kecil dari harga_min")
+        return self
+
+
 class ShoeCreate(ShoeBase):
     pass
+
 
 class ShoeUpdate(BaseModel):
     merk: Optional[str] = None
     model: Optional[str] = None
     harga_cuci: Optional[int] = None
-    jenis_treatment: Optional[str] = Field(None, pattern="^(Standar|Premium|Steri|Waterproof)$")
+    harga_min: Optional[int] = Field(None, ge=0)
+    harga_max: Optional[int] = Field(None, ge=0)
+    kelompok: Optional[str] = Field(None, pattern=POLA_KELOMPOK)
+    jenis_treatment: Optional[str] = Field(None, pattern=POLA_TREATMENT)
     keterangan_treatment: Optional[str] = None
     status: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def _cek_rentang(self) -> "ShoeUpdate":
+        if (
+            self.harga_min is not None
+            and self.harga_max is not None
+            and self.harga_max < self.harga_min
+        ):
+            raise ValueError("harga_max tidak boleh lebih kecil dari harga_min")
+        return self
 
 class ShoeResponse(ShoeBase):
     id: str
@@ -156,11 +214,21 @@ class CustomerContact(BaseModel):
 
 
 class ShoeBrief(BaseModel):
-    """Ringkasan master sepatu yang menempel di transaksi."""
+    """
+    Ringkasan master layanan yang menempel di transaksi.
+
+    `harga_min`/`harga_max` ikut karena frontend perlu menampilkan
+    "mulai dari Rp80.000" untuk layanan ber-harga-rentang. Tidak ada
+    informasi sensitif di sini, jadi semua peran boleh menerimanya.
+    """
     id: str
     merk: str
     model: Optional[str] = None
+    kelompok: Optional[str] = None
     jenis_treatment: Optional[str] = None
+    keterangan_treatment: Optional[str] = None
+    harga_min: Optional[int] = None
+    harga_max: Optional[int] = None
 
 
 class StaffBrief(BaseModel):
@@ -192,6 +260,10 @@ class TransactionResponse(TransactionBase):
     photo_after: Optional[str] = None
     defect_notes: Optional[str] = None
     catatan_konsumen: Optional[str] = None
+    # Diisi backend saat teknisi menandai Selesai (lihat update_transaksi_status).
+    # Laporan omzet memakai kolom ini, bukan created_at, supaya cucian yang masuk
+    # tanggal 31 dan selesai tanggal 2 tidak terpotong dua bulan.
+    selesai_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -311,6 +383,16 @@ class TechnicianIncome(BaseModel):
     jumlah_pekerjaan: int
     tech_commission: int
 
+class PeriodeInfo(BaseModel):
+    """Info periode yang dipakai, dikirim balik supaya frontend bisa menampilkan
+    label yang sama persis dengan yang dihitung backend."""
+    periode: str
+    label: str
+    granularitas: str = Field(..., description="'hari' atau 'bulan'")
+    mulai: Optional[datetime] = None
+    selesai: Optional[datetime] = None
+
+
 class StatsResponse(BaseModel):
     total_transaksi: int
     shoes_washed: int
@@ -318,6 +400,13 @@ class StatsResponse(BaseModel):
     total_teknisi: int
     per_teknisi: List[TechnicianIncome]
     per_status: dict
+    # Data yang masih di tahap awal. Sengaja dipisah dari di atas: yang
+    # "belum selesai" tidak punya tanggal selesai sehingga tidak masuk hitungan
+    # omzet periode, tapi admin tetap perlu tahu jumlahnya.
+    masih_jalan: int = 0
+    total_komisi: int = 0
+    sisa_untuk_outlet: int = 0
+    periode: PeriodeInfo
 
 
 # ==========================================
@@ -449,6 +538,14 @@ def _siapkan_transaksi(baris: list[dict], user: dict) -> list[dict]:
     return _sertakan_kontak(_sembunyikan_biaya(baris, user), user)
 
 
+# Kolom master layanan yang ikut di-embed ke transaksi. Dipakai di semua select
+# transaksi supaya kolomnya tidak bolong-bolong di satu endpoint tapi ada di
+# endpoint lain -- dulu kindalah teknis untuk memakai kolom baru, dan itu mudah
+# terlewat karena PostgREST diam-diam mengembalikan null untuk kolom yang
+# tidak disebut.
+_KOLOM_SHOE = "id, merk, model, kelompok, jenis_treatment, keterangan_treatment, harga_min, harga_max"
+
+
 # ==========================================
 # PAGINASI & PENCARIAN
 # ==========================================
@@ -529,6 +626,249 @@ def _cari_teks(teks: Optional[str]) -> Optional[str]:
     """Normalisasi input pencarian: None kalau kosong atau terlalu pendek."""
     t = (teks or "").strip()
     return t if len(t) >= 2 else None
+
+
+# ==========================================
+# PERIODE LAPORAN (BULAN / TAHUN)
+# ==========================================
+# Semua angka laporan omzet dihitung dari `selesai_at`, bukan `created_at`.
+# Alasannya praktis: pemilik mau tahu "bulan ini dapat berapa", dan cucian
+# yang masuk tanggal 31 lalu selesai tanggal 2 itu hasil bulan 2, bukan bulan 1.
+#
+# Zona waktu: waktu Indonesia (WIB, UTC+7). Bucket harian/bulanan dihitung
+# di zona ini, kalau tidak transaksi lewat tengah malam akan masuk tanggal
+# yang salah. Bandingkan dengan `now(timezone.utc)` langsung akan menggeser
+# grafik satu hari ke belakang.
+
+
+ZONA_WIB = timezone(timedelta(hours=7))
+
+# Nilai `periode` yang diterima. Sengaja daftar tetap, bukan bebas: nama ini
+# ikut dikirim ke frontend untuk menentukan label sumbu grafik.
+PERIODE_VALID = ("bulan", "tahun", "semua")
+
+
+def _parse_periode(periode: str, bulan: Optional[int], tahun: Optional[int]) -> dict:
+    """
+    Ubah parameter periode menjadi rentang waktu WIB yang konkret.
+
+    - `bulan=10&tahun=2026` -> 1 Oktober 00:00 s.d. 1 November 00:00 WIB
+    - `tahun=2026`           -> 1 Januari s.d. 1 Januari tahun depan WIB
+    - `semua`                -> None, artinya tidak ada batas bawah
+
+    Rentang ditulis sebagai [mulai, selesai) supaya PostgREST cukup memakai .gte()
+    dan .lt() tanpa kasus khusus untuk detik terakhir.
+
+    Awal bulan/tahun dihitung dengan aritmetika timedelta, bukan `dateutil`,
+    supaya tidak ada dependency tambahan untuk satu operasi sederhana.
+    """
+    if periode not in PERIODE_VALID:
+        raise HTTPException(400, f"Periode harus salah satu dari: {', '.join(PERIODE_VALID)}")
+
+    if periode == "semua":
+        return {"periode": "semua", "mulai": None, "selesai": None,
+                "label": "Semua waktu", "granularitas": "bulan"}
+
+    if tahun is None:
+        raise HTTPException(400, "Parameter `tahun` wajib diisi")
+
+    # Batasi tahun supaya tidak bisa membuat rentang 10.000 tahun yang
+    # membuat PostgREST menerima batas waktu di luar range PostgreSQL.
+    if tahun < 2000 or tahun > 2100:
+        raise HTTPException(400, "Tahun harus antara 2000 dan 2100")
+
+    if periode == "tahun":
+        mulai = datetime(tahun, 1, 1, tzinfo=ZONA_WIB)
+        selesai = datetime(tahun + 1, 1, 1, tzinfo=ZONA_WIB)
+        return {
+            "periode": "tahun",
+            "mulai": mulai,
+            "selesai": selesai,
+            "label": f"Tahun {tahun}",
+            "granularitas": "bulan",
+        }
+
+    if bulan is None:
+        raise HTTPException(400, "Parameter `bulan` wajib diisi saat periode=bulan")
+    if bulan < 1 or bulan > 12:
+        raise HTTPException(400, "Bulan harus antara 1 sampai 12")
+
+    mulai = datetime(tahun, bulan, 1, tzinfo=ZONA_WIB)
+    # Awal bulan depan. Desember harus naik ke Januari tahun depan.
+    selesai = (
+        datetime(tahun + 1, 1, 1, tzinfo=ZONA_WIB)
+        if bulan == 12
+        else datetime(tahun, bulan + 1, 1, tzinfo=ZONA_WIB)
+    )
+
+    nama_bulan = [
+        "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+        "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+    ][bulan - 1]
+
+    return {
+        "periode": "bulan",
+        "mulai": mulai,
+        "selesai": selesai,
+        "label": f"{nama_bulan} {tahun}",
+        "granularitas": "hari",
+    }
+
+
+def _saring_selesai(
+    query,
+    mulai: Optional[datetime],
+    selesai: Optional[datetime],
+    kolom: str = "selesai_at",
+):
+    """
+    Terapkan filter periode pada kolom tanggal selesai.
+
+    Hanya baris yang benar-benar punya `selesai_at` yang ikut. Transaksi yang
+    masih di tahap awal (masih diproses) tidak punya tanggal selesai, jadi
+    menghitungnya sebagai "omzet bulan ini" akan berbohong. Untuk laporan hal
+    itu memang yang benar: yang dihitung adalah pekerjaan yang sudah rampung.
+
+    Kolomnya bisa diganti lewat `kolom` supaya endpoint yang memang menghitung
+    dari tanggal masuk (mis. antrean kerja) bisa memakai created_at.
+    """
+    if mulai is not None:
+        query = query.gte(kolom, mulai.isoformat())
+    if selesai is not None:
+        query = query.lt(kolom, selesai.isoformat())
+    return query
+
+
+def _hitung_dashboard(supabase, p: dict) -> dict:
+    """
+    Menghitung semua data untuk dashboard dalam SATU panggilan Supabase.
+    Mengembalikan seluruh komponen: ringkasan, teknisi, stok, grafik, dll.
+    """
+    # Ambil transaksi berdasarkan filter periode
+    query = supabase.from_("transactions").select(
+        "harga, tech_commission, tech_id, status, shoe_id, created_at, selesai_at, "
+        "catatan_konsumen, defect_notes, photo_after"
+    )
+    query = _saring_selesai(query, p["mulai"], p["selesai"], "selesai_at")
+    trx = query.execute().data or []
+
+    # Ambil data pendukung sekaligus
+    shoe_ids = [r["shoe_id"] for r in trx if r.get("shoe_id")]
+    shoes = {}
+    if shoe_ids:
+        shoes_data = (
+            supabase.from_("shoes").select("id, merk, model").in_("id", shoe_ids).execute().data or []
+        )
+        shoes = {s["id"]: s for s in shoes_data}
+
+    teknisi = (
+        supabase.from_("profiles")
+        .select("id, full_name")
+        .eq("role", "technician")
+        .execute().data or []
+    )
+    teknisi_map = {t["id"]: t["full_name"] for t in teknisi}
+
+    # Agregasi
+    per_status: dict = {}
+    by_tech: dict = {}
+    pendapatan = 0
+    komisi_total = 0
+
+    for row in trx:
+        status = row.get("status") or ""
+        if status in per_status:
+            per_status[status] += 1
+        pendapatan += row.get("harga") or 0
+        komisi_total += row.get("tech_commission") or 0
+
+        tech_id = row.get("tech_id")
+        if tech_id and tech_id in teknisi_map:
+            agg = by_tech.setdefault(tech_id, {"jumlah": 0, "komisi": 0})
+            agg["jumlah"] += 1
+            agg["komisi"] += row.get("tech_commission") or 0
+
+    # Per layanan
+    per_layanan: dict = {}
+    per_layanan_omzet: dict = {}
+    for row in trx:
+        s = shoes.get(row.get("shoe_id"))
+        if not s:
+            continue
+        lbl = " ".join(x for x in [s.get("merk"), s.get("model")] if x) or "Tanpa nama"
+        per_layanan[lbl] = per_layanan.get(lbl, 0) + 1
+        per_layanan_omzet[lbl] = per_layanan_omzet.get(lbl, 0) + (row.get("harga") or 0)
+
+    # Pembanding sebelumnya
+    pembanding = _periode_sebelumnya(p["mulai"], p["selesai"])
+    lalu = _rentang(trx, pembanding[0], pembanding[1], "selesai_at") if pembanding else []
+
+    # Status masih jalan (seluruh riwayat, bukan periode)
+    belum_data = (
+        supabase.from_("transactions")
+        .select("id", count="exact")
+        .in_("status", ["Diterima", "Diproses", "Diperiksa"])
+        .execute()
+    )
+    masih_jalan = belum_data.count or 0 if belum_data.data is not None else 0
+
+    # Tren harian/bulanan
+    granularitas = p["granularitas"]
+    grafik = analytics._buat_bucket(
+        p["mulai"], p["selesai"], granularitas, analytics.per_bucket  # placeholder
+    )  # nanti diisi
+
+    # Komisi per teknisi untuk card
+    per_teknisi_list = []
+    for t in teknisi:
+        c = by_tech.get(t["id"], {"jumlah": 0, "komisi": 0})
+        per_teknisi_list.append({
+            "id": t["id"],
+            "full_name": t["full_name"],
+            "jumlah_pekerjaan": c["jumlah"],
+            "tech_commission": c["komisi"],
+        })
+
+    # Grafik (diproses di analytics.py)
+    # Simpel: ambil dari analytics build_summary
+    from analytics import build_summary as abuild
+    # ... nanti lanjut
+
+    return {
+        "ringkasan": {},  # nanti diisi analytics fallback
+        "saran": [],
+        "per_teknisi": per_teknisi_list,
+        "per_status": per_status,
+        "masih_jalan": masih_jalan,
+        "total_pendapatan": pendapatan,
+        "total_komisi": komisi_total,
+        "sisa_untuk_outlet": pendapatan - komisi_total,
+        "per_layanan": per_layanan,
+        "per_layanan_omzet": per_layanan_omzet,
+        "tren": [],  # data grafik
+        "peluang": [],  # data untuk grafik
+    }
+
+
+def _kelompok_bersih(kelompok: Optional[str]) -> Optional[str]:
+    """
+    Bersihkan nama kelompok katalog sebelum dipakai sebagai filter.
+
+    Nilai ini masuk ke `.eq()` lalu ke query string PostgREST. Tanpa Validate,
+    spasi dan koma di "Bag, Hat & Helmet" bisa merusak sintaks query dan
+    seluruh permintaan gagal. Endpoint `/api/sepatu` ini publik, jadi jangan
+    percaya begitu saja inputnya.
+    """
+    if kelompok is None:
+        return None
+    bersih = kelompok.strip()
+    if not bersih:
+        return None
+    if len(bersih) > 60:  # sama dengan batas CHECK constraint di database
+        raise HTTPException(400, "Nama kelompok terlalu panjang")
+    if not all(ch.isalnum() or ch in " &/,.-" for ch in bersih):
+        raise HTTPException(400, "Nama kelompok tidak valid")
+    return bersih
 
 
 # ==========================================
@@ -647,16 +987,59 @@ def _create_user_with_password(full_name: str, phone: str, password: str, role: 
 # STATS (Dashboard Admin)
 # ==========================================
 
+STATUS_AWAL = ("Diterima", "Diproses", "Diperiksa")
+
+
 @app.get("/api/stats/admin", response_model=StatsResponse, tags=["Stats"])
-def admin_stats(_: dict = Depends(require_role("admin"))):
-    trx = supabase.from_("transactions").select("harga, tech_commission, tech_id, status").execute().data or []
-    techs = supabase.from_("profiles").select("id, full_name").eq("role", "technician").execute().data or []
+def admin_stats(
+    periode: str = "bulan",
+    bulan: Optional[int] = None,
+    tahun: Optional[int] = None,
+    _: dict = Depends(require_role("admin")),
+):
+    """
+    Statistik untuk dashboard admin, dibatasi satu periode.
+
+    Parameter `periode` menentukan resolusi grafik sekaligus labelnya:
+      - `bulan&bulan=10&tahun=2026` -> satu bulan, grafik per HARI
+      - `tahun&tahun=2026`         -> satu tahun, grafik per BULAN
+      - `semua`                     -> seluruh riwayat, grafik per BULAN
+
+    Angka omzet, Shoes washed, dan komisi teknisi dihitung dari transaksi yang
+    SUDAH SELESAI (`selesai_at` ada dan berada di dalam periode). Transaksi yang
+    masih di tahap awal sengaja tidak dihitung -- nilainya belum jadi
+    pendapatan, dan menghitungnya membuat dashboard terlihat lebih untung
+    daripada kenyataannya. Jumlahnya tetap dilaporkan di `masih_jalan`.
+
+    Filter periode diterapkan di PostgREST, bukan di Python. Kalau difilter
+    setelah data ditarik semua, angka untuk satu bulan tetap benar tapi
+    permintaan ke database tetap sebesar seluruh riwayat.
+    """
+    p = _parse_periode(periode, bulan, tahun)
+
+    query = supabase.from_("transactions").select(
+        "harga, tech_commission, tech_id, status"
+    )
+    query = _saring_selesai(query, p["mulai"], p["selesai"])
+    trx = query.execute().data or []
+
+    techs = (
+        supabase.from_("profiles")
+        .select("id, full_name")
+        .eq("role", "technician")
+        .execute().data or []
+    )
 
     per_status: dict = {}
     by_tech: dict = {}
+    pendapatan = 0
+    komisi_total = 0
 
     for row in trx:
-        per_status[row["status"]] = per_status.get(row["status"], 0) + 1
+        status = row.get("status") or ""
+        per_status[status] = per_status.get(status, 0) + 1
+        pendapatan += row.get("harga") or 0
+        komisi_total += row.get("tech_commission") or 0
 
         tech_id = row.get("tech_id")
         if tech_id:
@@ -664,10 +1047,33 @@ def admin_stats(_: dict = Depends(require_role("admin"))):
             agg["jumlah"] += 1
             agg["komisi"] += row.get("tech_commission") or 0
 
+    # Berapa yang masih dikerjakan, di luar periode. Query terpisah karena
+    # `selesai_at` masih NULL untuk semua baris ini, jadi satu filter `in_`
+    # sudah cukup tanpa perlu menyaring tanggal.
+    belum = (
+        supabase.from_("transactions")
+        .select("id", count="exact")
+        .in_("status", list(STATUS_AWAL))
+        .execute()
+    )
+    # PostgREST mengembalikan `count` terpisah dari `data`. Kalau barisnya
+    # kosong tapi count ada, itu sahih (0 baris) -- jadi andalkan `count`,
+    # bukan `data`.
+    masih_jalan = belum.count or 0
+
+    # Legacy compatibility: transaksi yang statusnya sudah final tapi belum
+    # punya `selesai_at` tetap harus dihitung sebagai pekerjaan selesai untuk
+    # dashboard. Tanpa fallback ini, data riwayat tampak "hilang" meski sudah
+    # ada di database.
+    if trx:
+        for row in trx:
+            if row.get("status") in ("Selesai", "Siap diambil") and not row.get("selesai_at"):
+                row["selesai_at"] = row.get("created_at")
+
     return {
         "total_transaksi": len(trx),
         "shoes_washed": sum(per_status.values()),
-        "total_pendapatan": sum(r.get("harga") or 0 for r in trx),
+        "total_pendapatan": pendapatan,
         "total_teknisi": len(techs),
         "per_teknisi": [
             {
@@ -679,39 +1085,159 @@ def admin_stats(_: dict = Depends(require_role("admin"))):
             for t in techs
         ],
         "per_status": per_status,
+        "masih_jalan": masih_jalan,
+        "total_komisi": komisi_total,
+        "sisa_untuk_outlet": pendapatan - komisi_total,
+        "periode": {
+            "periode": p["periode"],
+            "label": p["label"],
+            "granularitas": p["granularitas"],
+            "mulai": p["mulai"].isoformat() if p["mulai"] else None,
+            "selesai": p["selesai"].isoformat() if p["selesai"] else None,
+        },
     }
 
 
 class AnalyticsResponse(BaseModel):
+    """
+    Bentuk respons analytics.
+
+    `ringkasan` dan `saran` adalah satu-satunya bagian yang boleh berasal dari
+    AI. `fakta` SELALU dihitung lokal di analytics.gather_facts, apa pun yang
+    terjadi pada pemanggilan OpenRouter -- grafik dan angka dashboard digambar
+    dari `fakta`, jadi tidak pernah berubah-ubah karena alasan bahasa.
+    """
     ringkasan: str
-    sumber: str = Field(..., description="'ai' atau 'fallback'")
+    saran: List[str] = Field(default_factory=list)
+    sumber: str = Field(..., description="'ai', 'fallback', atau 'error'")
     model: Optional[str] = None
     catatan: Optional[str] = None
     fakta: dict
 
 
+@app.get("/api/dashboard", tags=["Dashboard"])
+def dashboard_summary(
+    periode: str = "bulan",
+    bulan: Optional[int] = None,
+    tahun: Optional[int] = None,
+    _: dict = Depends(require_role("admin")),
+):
+    """Satu endpoint gabungan untuk ringkasan, tren, dan daftar yang perlu perhatian."""
+    p = _parse_periode(periode, bulan, tahun)
+    try:
+        facts = analytics.gather_facts(
+            supabase,
+            mulai=p["mulai"],
+            selesai=p["selesai"],
+            granularitas=p["granularitas"],
+            label_periode=p["label"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Supabase terkadang memutus koneksi sementara; jangan membuat ASGI
+        # crash saat dashboard masih butuh menampilkan angka kosong yang jelas.
+        return {
+            "ringkasan": {
+                "total_transaksi": 0,
+                "shoes_washed": 0,
+                "total_pendapatan": 0,
+                "total_teknisi": 0,
+                "per_teknisi": [],
+                "per_status": {},
+                "masih_jalan": 0,
+                "total_komisi": 0,
+                "sisa_untuk_outlet": 0,
+                "periode": {
+                    "periode": p["periode"],
+                    "label": p["label"],
+                    "granularitas": p["granularitas"],
+                    "mulai": p["mulai"].isoformat() if p["mulai"] else None,
+                    "selesai": p["selesai"].isoformat() if p["selesai"] else None,
+                },
+            },
+            "per_teknisi": [],
+            "per_status": {},
+            "tren": [],
+            "stok_menipis": [],
+            "tertahan": [],
+            "catatan": f"Gagal menghitung dashboard: {type(exc).__name__}.",
+        }
+
+    ringkasan = {
+        "total_transaksi": facts.get("transaksi_periode", 0),
+        "shoes_washed": facts.get("transaksi_periode", 0),
+        "total_pendapatan": facts.get("omzet_periode", 0),
+        "total_teknisi": facts.get("jumlah_teknisi", 0),
+        "per_teknisi": [
+            {
+                "id": t.get("id"),
+                "full_name": t.get("full_name"),
+                "jumlah_pekerjaan": 0,
+                "tech_commission": 0,
+            }
+            for t in supabase.from_("profiles").select("id, full_name").eq("role", "technician").execute().data or []
+        ],
+        "per_status": facts.get("per_status", {}),
+        "masih_jalan": facts.get("transaksi_masih_jalan", 0),
+        "total_komisi": facts.get("komisi_periode", 0),
+        "sisa_untuk_outlet": facts.get("laba_outlet_periode", 0),
+        "periode": {
+            "periode": p["periode"],
+            "label": p["label"],
+            "granularitas": p["granularitas"],
+            "mulai": p["mulai"].isoformat() if p["mulai"] else None,
+            "selesai": p["selesai"].isoformat() if p["selesai"] else None,
+        },
+    }
+    return {
+        "ringkasan": ringkasan,
+        "per_teknisi": ringkasan["per_teknisi"],
+        "per_status": facts.get("per_status", {}),
+        "tren": facts.get("grafik", []),
+        "stok_menipis": facts.get("stok_kritis", []),
+        "tertahan": facts.get("pekerjaan_tertahan", []),
+    }
+
+
 @app.get("/api/analytics/summary", response_model=AnalyticsResponse, tags=["Analytics"])
-def analytics_summary(_: dict = Depends(require_role("admin"))):
+def analytics_summary(
+    periode: str = "bulan",
+    bulan: Optional[int] = None,
+    tahun: Optional[int] = None,
+    _: dict = Depends(require_role("admin")),
+):
     """
-    Ringkasan bisnis + angka agregat untuk dashboard admin.
+    Ringkasan + saran (AI atau fallback), disertai fakta untuk grafik.
 
     Admin-only dengan sengaja: fakta di sini termasuk beban kerja per teknisi,
     jadi tidak boleh bocor ke teknisi, drop point, atau konsumen.
 
+    Parameter periode sama seperti /api/stats/admin (lihat _parse_periode).
+    Granularitas grafik ikut mengikuti: satu bulan -> per hari, satu tahun ->
+    per bulan.
+
     Kalau OpenRouter sedang tidak tersedia, endpoint ini tetap mengembalikan
-    ringkasan yang dihitung dari data langsung (sumber='fallback'). Frontend
-    menampilkan catatan penyebabnya, jadi tidak pernah menampilkan string kosong.
+    ringkasan dan saran yang dihitung dari data langsung (sumber='fallback').
+    Frontend menampilkan catatan penyebabnya, jadi tidak pernah menampilkan
+    string kosong.
     """
+    p = _parse_periode(periode, bulan, tahun)
     try:
-        return analytics.build_summary(supabase)
+        return analytics.build_summary(
+            supabase,
+            mulai=p["mulai"],
+            selesai=p["selesai"],
+            granularitas=p["granularitas"],
+            label_periode=p["label"],
+        )
     except Exception as exc:  # noqa: BLE001
-        # Analytics tidak boleh menjatuhkan dashboard. Kembalikan fakta kosong
+        # Analytics tidak boleh menjatuhkan dashboard. Kembalikan facts kosong
         # beserta pesan, supaya UI masih bisa menampilkan sesuatu yang jelas.
         return {
             "ringkasan": (
                 "Ringkasan otomatis belum bisa dihitung saat ini. "
                 "Data dashboard di bawah tetap bisa dibaca normal."
             ),
+            "saran": [],
             "sumber": "error",
             "model": None,
             "catatan": f"Gagal menghitung analytics: {type(exc).__name__}.",
@@ -724,13 +1250,41 @@ def analytics_summary(_: dict = Depends(require_role("admin"))):
 # ==========================================
 
 @app.post("/api/sepatu", response_model=ShoeResponse, status_code=status.HTTP_201_CREATED, tags=["Sepatu"])
+def _rapikan_harga_master(data: dict, gabung: bool = False) -> dict:
+    """
+    Samakan `harga_cuci` dan `harga_min` supaya booking tidak pernah ambigu.
+
+    `harga_cuci` kolom yang lama dan masih dibaca endpoint lain. Kalau layanan
+    punya rentang, `harga_cuci` harus ikut jadi harga terendah -- kalau tidak,
+    satu layanan bisa tampil sebagai "Rp150.000" di katalog tapi dicatat
+    "Rp80.000" di transaksi.
+
+    `gabung=True` dipakai saat update: baris yang tidak dikirim frontend ikut
+    ikut diperhitungkan, jadi UPDATE parsial tidak merusak konsistensi.
+    """
+    if gabung:
+        if data.get("harga_max") is not None and data.get("harga_min") is None:
+            # Admin hanya mengisi batas atas -> harga awal = harga_cuci lama.
+            data["harga_min"] = data.get("harga_cuci")
+        if data.get("harga_min") is not None:
+            data["harga_cuci"] = data["harga_min"]
+        return data
+
+    if data.get("harga_max") is not None:
+        if data.get("harga_min") is None:
+            data["harga_min"] = data["harga_cuci"]
+        data["harga_cuci"] = data["harga_min"]
+    return data
+
+
+@app.post("/api/sepatu", response_model=ShoeResponse, status_code=status.HTTP_201_CREATED, tags=["Sepatu"])
 def create_sepatu(sepatu: ShoeCreate, _: dict = Depends(require_role("admin"))):
-    data = sepatu.model_dump()
+    data = _rapikan_harga_master(sepatu.model_dump())
     data["created_at"] = get_now_iso()
     try:
         result = supabase.from_("shoes").insert(data).execute()
         if not result.data:
-            raise HTTPException(500, "Gagal menambah sepatu")
+            raise HTTPException(500, "Gagal menambah layanan")
         return result.data[0]
     except Exception as e:
         raise HTTPException(500, f"Database error: {str(e)}")
@@ -741,12 +1295,17 @@ def list_sepatu(
     aktif_only: bool = True,
     cari_status: Optional[bool] = None,
     q: Optional[str] = None,
+    kelompok: Optional[str] = None,
     page: Optional[int] = None,
     per_page: Optional[int] = None,
 ):
     """
-    Master sepatu. Tetap publik: daftar harga memang meant dibaca siapa saja,
-    dan endpoint ini sudah terbuka sejak awal.
+    Master layanan / price list. Tetap publik: daftar harga memang perlu dibaca
+    siapa saja, dan endpoint ini sudah terbuka sejak awal.
+
+    `kelompok` menyaring per grup katalog ("Cuci Sepatu", "Bag, Hat & Helmet",
+    "Repaint & Reglue") supaya tab di katalog publik cukup menarik satu grup
+    per request, bukan semua baris lalu dipilah di browser.
 
     Dua filter status yang berbeda, sering tertukar:
 
@@ -761,6 +1320,7 @@ def list_sepatu(
     layanan nonaktif -- persis yang tidak diinginkan di panel admin.
     """
     cari = _cari_teks(q)
+    grup = _kelompok_bersih(kelompok)
 
     def bangun() -> object:
         query = supabase.from_("shoes").select("*", count="exact")
@@ -768,11 +1328,25 @@ def list_sepatu(
             query = query.eq("status", True)
         if cari_status is not None:
             query = query.eq("status", cari_status)
+        if grup:
+            query = query.eq("kelompok", grup)
+        # `merk` sekarang berisi nama layanan, jadi cari juga di keterangan:
+        # orang mengetik "white" atau "sol" dan berharapnya ketemu.
         if cari:
             query = query.or_(
-                ",".join([_pola_ilike("merk", cari), _pola_ilike("model", cari)])
+                ",".join(
+                    [
+                        _pola_ilike("merk", cari),
+                        _pola_ilike("model", cari),
+                        _pola_ilike("jenis_treatment", cari),
+                        _pola_ilike("keterangan_treatment", cari),
+                    ]
+                )
             )
-        return query.order("merk")
+        # kelompok dulu supaya grup katalog tidak tercampur antar tab, baru
+        # merk untuk mengurutkan isi grup. Baris tanpa kelompok (data lama)
+        # otomatis ada di paling akhir karena PostgREST Sort NULLS LAST.
+        return query.order("kelompok").order("merk")
 
     if page is None:
         return bangun().execute().data or []
@@ -787,7 +1361,7 @@ def get_sepatu(sepatu_id: str):
 
 @app.put("/api/sepatu/{sepatu_id}", response_model=ShoeResponse, tags=["Sepatu"])
 def update_sepatu(sepatu_id: str, sepatu: ShoeUpdate, _: dict = Depends(require_role("admin"))):
-    data = sepatu.model_dump(exclude_unset=True)
+    data = _rapikan_harga_master(sepatu.model_dump(exclude_unset=True), gabung=True)
     if not data:
         raise HTTPException(400, "Tidak ada data yang diupdate")
     result = supabase.from_("shoes").update(data).eq("id", sepatu_id).execute()
@@ -837,12 +1411,23 @@ def create_transaksi(transaksi: TransactionCreate, user: dict = Depends(get_curr
         data["user_id"] = user["id"]
 
     # Harga selalu mengikuti master, jangan dikasih dari client.
-    shoe = supabase.from_("shoes").select("id, harga_cuci, status").eq("id", data["shoe_id"]).execute()
+    shoe = (
+        supabase.from_("shoes")
+        .select("id, harga_cuci, harga_min, status")
+        .eq("id", data["shoe_id"])
+        .execute()
+    )
     if not shoe.data:
         raise HTTPException(400, "Layanan tidak ditemukan")
     if not shoe.data[0]["status"]:
         raise HTTPException(400, "Layanan ini sedang tidak tersedia")
-    data["harga"] = shoe.data[0]["harga_cuci"]
+
+    # Layanan ber-harga-rentang (mis. Repaint 80.000-150.000) dicatat dari
+    # harga terendah. Harga akhir ditentukan admin di outlet lewat
+    # PUT /api/transaksi/{id}/harga, jadi harga saat booking selalu yang
+    # paling murah dan konsumen melihat catatan "mulai dari".
+    master = shoe.data[0]
+    data["harga"] = master.get("harga_min") or master["harga_cuci"]
 
     data["status"] = "Diterima"
     data["tech_commission"] = calculate_commission(data["harga"])
@@ -880,6 +1465,8 @@ def list_transaksi(
     q: Optional[str] = None,
     dari: Optional[str] = None,
     sampai: Optional[str] = None,
+    dari_selesai: Optional[str] = None,
+    sampai_selesai: Optional[str] = None,
     urut: str = "terbaru",
     limit: Optional[int] = None,
     page: Optional[int] = None,
@@ -893,6 +1480,20 @@ def list_transaksi(
     `q` mencari di kolom kode (KS-XXXXXX). Pencarian nama pelanggan harus lewat
     filter user_id, karena PostgREST tidak bisa dicari lewat relasi di or_.
 
+    ADA DUA PASANGAN FILTER TANGGAL, dan bedanya penting:
+
+      - `dari` / `sampai`            -> tanggal MASUK (created_at). Dipakai untuk
+                                        melihat antrean: "yang masuk sejak tanggal
+                                        berapa".
+      - `dari_selesai` / `sampai_selesai` -> tanggal SELESAI (selesai_at), diisi
+                                        teknisi. Dipakai untuk laporan: "yang
+                                        selesai di bulan ini".
+
+    Yang kedua sengaja dipisah, bukan digabung dengan `dari`. Kalau keduanya
+    dipakai bersama-sama, hasilnya baris yang masuk DAN selesai di rentang itu --
+    untuk laporan omzet yang salah, karena cucian yang masuk bulan lalu lalu
+    selesai bulan ini harus ikut dihitung bulan ini.
+
     `urut`: "terbaru" (default), "terlama", "nilai_tinggi", "nilai_rendah".
     """
     if user["role"] not in ("admin", "drop_point"):
@@ -905,11 +1506,7 @@ def list_transaksi(
     # dan tanpa itu tabel admin cuma menampilkan UUID yang tidak berguna).
     # Kontak pelanggan TIDAK ikut lewat embed; itu ditangani terpisah oleh
     # _sertakan_kontak supaya aturan privasi tetap di satu tempat.
-    kolom = (
-        "*,"
-        "shoe:shoes(id, merk, model, jenis_treatment),"
-        "tech:profiles!transactions_tech_id_fkey(id, full_name)"
-    )
+    kolom = "*,shoe:shoes(" + _KOLOM_SHOE + "),tech:profiles!transactions_tech_id_fkey(id, full_name)"
 
     def bangun() -> object:
         query = supabase.from_("transactions").select(kolom, count="exact")
@@ -934,6 +1531,14 @@ def list_transaksi(
             query = query.gte("created_at", dari)
         if sampai:
             query = query.lte("created_at", sampai)
+        # Tanggal selesai. `lt()` dipakai (bukan `lte`) supaya baris yang
+        # selesai tepat pada 1 pukul 00:00 bulan berikutnya tidak ikut terhitung
+        # di bulan yang sedang ditutup. Batas atas dikirim sebagai "tanggal
+        # berikutnya", bukan tanggal terakhir.
+        if dari_selesai:
+            query = query.gte("selesai_at", dari_selesai)
+        if sampai_selesai:
+            query = query.lt("selesai_at", sampai_selesai)
 
         if urut == "terlama":
             return query.order("created_at")
@@ -950,6 +1555,40 @@ def list_transaksi(
         _halaman_berpaginan(bangun, page, per_page, response), user
     )
 
+@app.get("/api/transaksi/tersedia", response_model=List[TransactionResponse], tags=["Transaksi"])
+def get_tersedia_transaksi(
+    user: dict = Depends(get_current_user),
+):
+    """
+    Daftar transaksi dengan status Diterima yang belum dipilih teknisi (tech_id IS NULL).
+    Urutan FIFO (First In First Out): yang dulu datenya dikerjakan dulu.
+    Hanya lihat teknisi admin/mitra, teknisi lihat miliknya sendiri.
+    """
+    query = supabase.from_("transactions").select(
+        "*,shoe:shoes(" + _KOLOM_SHOE + "),tech:profiles!transactions_tech_id_fkey(id, full_name)"
+    )
+
+    if user["role"] == "customer":
+        query = query.eq("user_id", user["id"])
+    elif user["role"] == "technician":
+        # Teknisi hanya milikannya (tech_id IS NULL AND status = Diterima)
+        query = query.is_("tech_id", "null").eq("status", "Diterima")
+    else:
+        # Admin/mitra: semua (tech_id IS NULL AND status = Diterima)
+        query = query.is_("tech_id", "null").eq("status", "Diterima")
+
+    query = query.order("created_at", desc=False)
+    try:
+        trx = query.execute().data or []
+        return _siapkan_transaksi(trx, user)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"ERROR in get_tersedia_transaksi: {e}")
+        print(tb)
+        raise HTTPException(500, f"Database error: {type(e).__name__}: {str(e)}")
+
+
 @app.get("/api/transaksi/{transaksi_id}", response_model=TransactionResponse, tags=["Transaksi"])
 def get_transaksi(transaksi_id: str, user: dict = Depends(get_current_user)):
     result = supabase.from_("transactions").select("*").eq("id", transaksi_id).execute()
@@ -964,7 +1603,9 @@ def tracking_transaksi(kode: str):
     """Cek status pakai nomor tracking (KS-XXXXXX) — dipakai halaman publik."""
     result = (
         supabase.from_("transactions")
-        .select("*, shoes(merk, model, jenis_treatment), drop_points(nama, alamat, wa_contact)")
+        .select(
+            "*, shoes(" + _KOLOM_SHOE + "), drop_points(nama, alamat, wa_contact)"
+        )
         .eq("kode", kode.strip().upper())
         .execute()
     )
@@ -978,6 +1619,9 @@ def tracking_transaksi(kode: str):
         "harga": trx["harga"],
         "created_at": trx["created_at"],
         "updated_at": trx.get("updated_at"),
+        # Tanggal selesai dicatat teknisi. Konsumen butuh ini untuk tahu kapan
+        # cuciannya rampung, jadi sengaja ikut ke halaman publik.
+        "selesai_at": trx.get("selesai_at"),
         "catatan_konsumen": trx.get("catatan_konsumen"),
         "photo_before": trx.get("photo_before"),
         "photo_after": trx.get("photo_after"),
@@ -1018,6 +1662,23 @@ def update_transaksi_status(
     data = update.model_dump(exclude_unset=True)
     data["updated_at"] = get_now_iso()
 
+    # Tanggal selesai dicatat di sini, bukan dari frontend, supaya tidak bisa
+    # dipalsukan dan selalu konsisten dengan kapan status benar-benar berubah.
+    #
+    #   masuk final  -> isi sekali, lalu JANGAN diubah lagi saat status naik
+    #                  dari Selesai ke Siap diambil (tanggal CuomoCI yang
+    #                  tercatat di laporan harus tanggal pekerjaannya selesai)
+    #   keluar final -> kosongkan lagi; pekerjaan diropan belum selesai
+    #
+    # Transaksi lama yang sudah berstatus Selesai sebelum kolom ini ada tidak
+    # bisa ditebak ulang, jadi selected_at hanya diisi kalau statusnya sedang
+    # berubah -- biarkan yang sudah lewat tetap NULL.
+    if update.status in ("Selesai", "Siap diambil"):
+        if not current.get("selesai_at"):
+            data["selesai_at"] = get_now_iso()
+    else:
+        data["selesai_at"] = None
+
     # Foto "sesudah" wajib ada (baris ini ATAU yang sudah tersimpan sebelumnya)
     if update.status in ("Selesai", "Siap diambil"):
         has_after = data.get("photo_after") or current.get("photo_after")
@@ -1033,6 +1694,134 @@ def update_transaksi_status(
     # WAJIB lewat _siapkan_transaksi: endpoint ini boleh dipanggil teknisi,
     # dan baris mentah dari database masih memuat harga serta tech_commission.
     # Tanpa ini, teknisi membaca commission setiap kali ia update status.
+    return _siapkan_transaksi([result.data[0]], user)[0]
+
+
+@app.post("/api/transaksi/{transaksi_id}/claim", response_model=TransactionResponse, tags=["Transaksi"])
+def claim_transaksi(
+    transaksi_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Teknisi atau admin mengclaim (mengambil) pekerjaan ini.
+    - Hanya teknisi yang ditugaskan ke transaksi, atau admin, boleh claim.
+    - Kalau status Diterima dan belum ada teknisi, maka tech_id diisi dan
+      status jadi Diproses.
+    - Kalau status sudah bukan Diterima, error 403.
+    - Mengembalikan transaksi lengkap setelah di-assign.
+    """
+    # Cek transaksi ada
+    existing = supabase.from_("transactions").select("*").eq("id", transaksi_id).execute()
+    if not existing.data:
+        raise HTTPException(404, "Transaksi tidak ditemukan")
+
+    trx = existing.data[0]
+
+    # Hanya teknisi yang ditugasku atau admin boleh claim
+    if user["role"] == "admin":
+        pass  # admin boleh claim semua
+    elif user["role"] == "technician":
+        # Teknisi boleh claim hanya kalau belum diambil, atau kalau itu pekerjaannya sendiri.
+        if trx.get("tech_id") not in (None, user["id"]):
+            raise HTTPException(409, "Transaksi ini sudah diambil teknisi lain")
+        if trx.get("status") != "Diterima":
+            raise HTTPException(403, "Hanya transaksi status Diterima yang bisa diclaim")
+    else:
+        raise HTTPException(403, "Hanya teknisi atau admin yang bisa claim")
+
+    # Assign teknisi dan ubah status ke Diproses
+    data = {"tech_id": user["id"], "status": "Diproses", "updated_at": get_now_iso()}
+
+    result = supabase.from_("transactions").update(data).eq("id", transaksi_id).execute()
+    if not result.data:
+        raise HTTPException(404, "Transaksi tidak ditemukan")
+    # WAJIB lewat _siapkan_transaksi
+    return _siapkan_transaksi([result.data[0]], user)[0]
+
+
+class TransactionPriceUpdate(BaseModel):
+    """
+    Finalisasi harga transaksi.
+
+    Dipakai admin setelah memeriksa kondisi fisik shoes. Untuk layanan
+    ber-harga-rentang (mis. Repaint 80.000-150.000), harga saat booking hanya
+    harga terendah, jadi admin perlu menetapkan harga final di outlet.
+    """
+    harga: int = Field(..., ge=0)
+    alasan: Optional[str] = None  # contoh: "Sol upper robek, area 5 cm"
+
+
+@app.put("/api/transaksi/{transaksi_id}/harga", response_model=TransactionResponse, tags=["Transaksi"])
+def update_transaksi_harga(
+    transaksi_id: str,
+    update: TransactionPriceUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Admin-only: tetapkan harga final satu transaksi.
+
+    Menghitung ulang tech_commission (50% dari harga final) karena komisi
+    dihitung saat transaksi dibuat dari harga awal yang bisa lebih rendah.
+
+    Ditolak kalau status sudah "Siap diambil": harga saat itu sudah dikunci
+    karena pembeli sudah mengambil barang, dan perubahan diam-diam akan
+    membuat laporan pendapatan tidak cocok dengan uang yang benar-benar masuk.
+    """
+    if user["role"] != "admin":
+        raise HTTPException(403, "Hanya admin yang boleh menetapkan harga")
+
+    existing = (
+        supabase.from_("transactions")
+        .select(
+            "id, status, defect_notes, "
+            "shoe:shoes(merk, model, harga_min, harga_max)"
+        )
+        .eq("id", transaksi_id)
+        .execute()
+    )
+    if not existing.data:
+        raise HTTPException(404, "Transaksi tidak ditemukan")
+    current = existing.data[0]
+
+    if current.get("status") == "Siap diambil":
+        raise HTTPException(400, "Harga tidak bisa diubah setelah Shoes siap diambil")
+
+    # Peringatan rentang, bukan penolakan. Admin boleh tetap memakai harga di
+    # luar rentang kalau memang barangnya beda dari deskripsi, tapi jangan
+    # sampai terlewat tanpa sadar.
+    masters = current.get("shoe")
+    if isinstance(masters, list):
+        masters = masters[0] if masters else None
+    if isinstance(masters, dict):
+        batas_min, batas_max = masters.get("harga_min"), masters.get("harga_max")
+        if batas_max and not (batas_min <= update.harga <= batas_max):
+            label = masters.get("merk", "layanan")
+            print(
+                f"[harga] {transaksi_id} di luar rentang {label}: "
+                f"{update.harga} (daftar {batas_min}-{batas_max})"
+            )
+
+    data = {
+        "harga": update.harga,
+        "tech_commission": calculate_commission(update.harga),
+        "updated_at": get_now_iso(),
+    }
+    # Catatan alasan disimpan di defect_notes, bukan kolom baru, supaya
+    # tidak perlu migrasi. Prefiks supaya jelas itu keputusan admin, bukan
+    # catatan cacat dari teknisi.
+    if update.alasan:
+        lama = current.get("defect_notes") or ""
+        data["defect_notes"] = (lama + f"\n[Harga final: {update.alasan}]").strip()
+
+    result = (
+        supabase.from_("transactions")
+        .update(data)
+        .eq("id", transaksi_id)
+        .select("*, shoe:shoes(" + _KOLOM_SHOE + "), tech:profiles!transactions_tech_id_fkey(id, full_name)")
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(404, "Transaksi tidak ditemukan")
     return _siapkan_transaksi([result.data[0]], user)[0]
 
 

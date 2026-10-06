@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Inbox, Loader2, X } from 'lucide-react'
-import { cn } from '../utils/helpers'
+import { useEffect, useRef, useState } from "react"
+import { AlertCircle, Inbox, Loader2, X, Search } from "lucide-react"
+import { cn } from "../utils/helpers"
+import React from "react"
 
 /**
  * Shell modal untuk form admin.
@@ -9,31 +10,31 @@ import { cn } from '../utils/helpers'
  * supaya keyboard user tidak terjebak di halaman di belakang. Scroll body
  * dikunci selama modal terbuka supaya halaman belakang tidak ikut bergeser.
  */
-export default function Modal({ open, onClose, title, description, children, footer, lebar = 'max-w-lg' }) {
+export default function Modal({ open, onClose, title, description, children, footer, lebar = "max-w-lg" }) {
   const dialogRef = useRef(null)
 
   useEffect(() => {
     if (!open) return undefined
 
     const overflowAwal = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    document.body.style.overflow = "hidden"
 
     const timer = setTimeout(() => {
       const fokusable = dialogRef.current?.querySelector(
-        'input:not([type=hidden]), select, textarea, button',
+        "input:not([type=hidden]), select, textarea, button",
       )
       fokusable?.focus()
     }, 60)
 
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === "Escape") onClose()
     }
-    window.addEventListener('keydown', onKey)
+    window.addEventListener("keydown", onKey)
 
     return () => {
       clearTimeout(timer)
       document.body.style.overflow = overflowAwal
-      window.removeEventListener('keydown', onKey)
+      window.removeEventListener("keydown", onKey)
     }
   }, [open, onClose])
 
@@ -49,7 +50,7 @@ export default function Modal({ open, onClose, title, description, children, foo
         aria-modal="true"
         aria-label={title}
         className={cn(
-          'relative w-full bg-white rounded-2xl shadow-xl animate-slide-up flex flex-col max-h-[90vh]',
+          "relative w-full bg-white rounded-2xl shadow-xl animate-slide-up flex flex-col max-h-[90vh]",
           lebar,
         )}
       >
@@ -91,7 +92,7 @@ export function Field({ label, required, error, hint, children, className }) {
 }
 
 /** Dialog konfirmasi untuk aksi yang tidak bisa dibatalkan (hapus, nonaktif). */
-export function KonfirmasiDialog({ open, onClose, onKonfirmasi, judul, pesan, labelKonfirmasi = 'Hapus' }) {
+export function KonfirmasiDialog({ open, onClose, onKonfirmasi, judul, pesan, labelKonfirmasi = "Hapus" }) {
   const [sibuk, setSibuk] = useState(false)
   if (!open) return null
 
@@ -168,7 +169,7 @@ export function GagalMuat({ pesan, onCobaLagi }) {
 }
 
 /** Tabel kosong, dengan pesan yang menyesuaikan filter aktif. */
-export function Kosong({ judul = 'Belum ada data', pesan, action }) {
+export function Kosong({ judul = "Belum ada data", pesan, action }) {
   return (
     <div className="flex flex-col items-center gap-3 px-6 py-14 text-center">
       <div className="h-12 w-12 rounded-2xl bg-slate-100 flex items-center justify-center">
@@ -185,11 +186,11 @@ export function Kosong({ judul = 'Belum ada data', pesan, action }) {
 
 /** Lencana aktif / nonaktif. */
 export function BadgeAktif({ aktif }) {
-  return <span className={aktif ? 'badge-received' : 'badge-canceled'}>{aktif ? 'Aktif' : 'Nonaktif'}</span>
+  return <span className={aktif ? "badge-received" : "badge-canceled"}>Aktif</span>
 }
 
 /** Tombol tambah di header kartu, supaya keempat halaman konsisten. */
-export function TombolTambah({ onClick, children = 'Tambah' }) {
+export function TombolTambah({ onClick, children = "Tambah" }) {
   return (
     <button onClick={onClick} className="btn-primary">
       <span aria-hidden="true">+</span>
@@ -197,3 +198,40 @@ export function TombolTambah({ onClick, children = 'Tambah' }) {
     </button>
   )
 }
+
+/**
+ * Input pencarian yang di-memo supaya TIDAK re-render saat parent update.
+ *
+ * Bug "ketik 1 huruf lalu kursor lompat/keluar" terjadi karena search input
+ * ikut re-render saat data tabel di-update (loading selesai, data baru).
+ * Dengan React.memo + props stabil (onChange pakai useCallback di parent),
+ * input ini tetap mounted walau parent re-render.
+ *
+ * Pemakaian:
+ *   const [cari, setCari] = useCariTunda(setFilter)
+ *   <SearchInput value={cari} onChange={setCari} placeholder="Cari..." />
+ *
+ * Catatan: parent HARUS mem-pass `onChange` yang stabil (pakai useCallback)
+ * supaya memo ini efektif. Kalau parent bikin fungsi inline baru tiap render,
+ * memo tidak akan berfungsi.
+ */
+export const SearchInput = React.memo(function SearchInput({
+  value,
+  onChange,
+  placeholder = "Cari...",
+  className = "",
+}) {
+  return (
+    <div className={cn("relative", className)}>
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+      <input
+        type="search"
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        className="input pl-9"
+        aria-label={placeholder}
+      />
+    </div>
+  )
+})

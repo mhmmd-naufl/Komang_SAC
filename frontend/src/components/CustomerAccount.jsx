@@ -13,6 +13,7 @@ import {
 import { transactionsApi, shoesApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { getStatusConfig, formatRupiah, formatDateTime, cn } from '../utils/helpers'
+import { SearchInput } from './AdminUi'
 
 /**
  * Halaman akun Konsumen.
@@ -218,18 +219,15 @@ export default function CustomerAccount() {
       <div>
         <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center mb-4">
           <h2 className="text-lg font-bold text-slate-900 shrink-0">Riwayat Shoes</h2>
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <input
-              type="search"
+          <div className="flex-1 sm:max-w-xs">
+            <SearchInput
               value={cari}
-              onChange={(e) => setCari(e.target.value)}
-              placeholder="Cari nomor booking atau nama sepatu…"
-              className="input pl-9"
-              aria-label="Cari riwayat"
+              onChange={setCari}
+              placeholder="Cari nomor booking atau nama sepatu..."
             />
+            
           </div>
-        </div>
+          </div>
 
         {loading ? (
           <div className="space-y-3">

@@ -6,15 +6,15 @@ import {
   ImageOff,
   Loader2,
   MessageSquare,
-  Search,
   Wallet,
 } from 'lucide-react'
 import { useCariTunda, useTabel } from '../../hooks/useTabel'
 import { ambilSemua, unduhCsv } from '../../utils/csv'
-import { cn, formatDateTime, formatRupiah, getStatusConfig } from '../../utils/helpers'
+import { cn, adaRentang, formatDateTime, formatRupiah, getStatusConfig } from '../../utils/helpers'
+import { transactionsApi } from '../../services/api'
 import { toast } from '../Toast'
 import Pagination from '../Pagination'
-import Modal, { Field, GagalMuat, Kosong, Memuat } from '../AdminUi'
+import Modal, { Field, GagalMuat, Kosong, Memuat, SearchInput } from '../AdminUi'
 
 const STATUS = ['Diterima', 'Diproses', 'Diperiksa', 'Selesai', 'Siap diambil']
 
@@ -28,10 +28,16 @@ const URUT = [
 const KOLOM_CSV = [
   { judul: 'Kode', kunci: 'kode' },
   { judul: 'Tanggal Masuk', kunci: 'created_at', nilai: (t) => formatDateTime(t.created_at) },
+  // Tanggal selesai dicatat teknisi saat status jadi Selesai. Kolom ini yang
+  // dipakai buat hitung omzet per bulan/tahun, jadi harus ikut diekspor --
+  // tanpa itu, laporan yang dihitung ulang dari CSV tidak akan cocok dengan
+  // yang tampil di dashboard.
+  { judul: 'Tanggal Selesai', kunci: 'selesai_at', nilai: (t) => (t.selesai_at ? formatDateTime(t.selesai_at) : '') },
   { judul: 'Pelanggan', nilai: (t) => t.customer?.full_name || '' },
   { judul: 'No. WhatsApp Pelanggan', nilai: (t) => t.customer?.phone || '' },
-  { judul: 'Merk Sepatu', nilai: (t) => t.shoe?.merk || '' },
-  { judul: 'Model', nilai: (t) => t.shoe?.model || '' },
+  { judul: 'Layanan', nilai: (t) => t.shoe?.merk || '' },
+  { judul: 'Varian', nilai: (t) => t.shoe?.model || '' },
+  { judul: 'Kelompok', nilai: (t) => t.shoe?.kelompok || '' },
   { judul: 'Treatment', nilai: (t) => t.shoe?.jenis_treatment || '' },
   { judul: 'Teknisi', nilai: (t) => t.tech?.full_name || '' },
   { judul: 'Status', kunci: 'status' },
@@ -160,7 +166,7 @@ export default function AdminTransaksi() {
           <tr className="border-b border-slate-200 bg-slate-50/60 text-left">
             <th className="px-4 py-3 font-semibold text-slate-600">Kode</th>
             <th className="px-4 py-3 font-semibold text-slate-600">Pelanggan</th>
-            <th className="px-4 py-3 font-semibold text-slate-600">Sepatu</th>
+            <th className="px-4 py-3 font-semibold text-slate-600">Layanan</th>
             <th className="px-4 py-3 font-semibold text-slate-600">Teknisi</th>
             <th className="px-4 py-3 font-semibold text-slate-600">Status</th>
             <th className="px-4 py-3 font-semibold text-slate-600 text-right">Harga</th>
@@ -194,8 +200,12 @@ export default function AdminTransaksi() {
                 <td className="px-4 py-3">
                   <span className={cfg.className}>{cfg.label}</span>
                 </td>
-                <td className="px-4 py-3 text-right font-semibold text-slate-900">
-                  {formatRupiah(t.harga)}
+                <td className="px-4 py-3 text-right">
+                  <p className="font-semibold text-slate-900">{formatRupiah(t.harga)}</p>
+                  {adaRentang(t.shoe?.harga_min, t.shoe?.harga_max) &&
+                    t.harga <= (t.shoe?.harga_min || 0) && (
+                      <p className="text-[10px] text-amber-600">harga awal, belum final</p>
+                    )}
                 </td>
                 <td className="px-4 py-3 text-right text-slate-600">
                   {formatRupiah(t.tech_commission)}
@@ -236,17 +246,13 @@ export default function AdminTransaksi() {
       <div className="card overflow-hidden">
         <div className="space-y-3 p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-            <div className="relative flex-1 lg:max-w-xs">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-              <input
-                type="search"
-                value={cari}
-                onChange={(e) => setCari(e.target.value)}
-                placeholder="Cari kode tracking (KS-XXXXXX)..."
-                className="input pl-9"
-                aria-label="Cari kode tracking"
-              />
-            </div>
+            <div className="flex-1 sm:max-w-xs">
+            <SearchInput
+              value={cari}
+              onChange={setCari}
+              placeholder="Cari kode tracking (KS-XXXXXX)..."
+            />
+          </div>
 
             <select
               value={statusAktif}
@@ -325,7 +331,16 @@ export default function AdminTransaksi() {
         />
       </div>
 
-      <DetailTransaksi transaksi={detail} onClose={() => setDetail(null)} />
+      <DetailTransaksi
+        transaksi={detail}
+        onClose={() => setDetail(null)}
+        onTersimpan={(trx) => {
+          // Perbarui baris yang sedang dibuka supaya angka harga di detail ikut
+          // berubah tanpa harus menutup dan membuka modal lagi.
+          setDetail(trx)
+          tabel.muatUlang()
+        }}
+      />
     </div>
   )
 }
@@ -374,7 +389,128 @@ function Foto({ label, url, wajib }) {
   )
 }
 
-function DetailTransaksi({ transaksi, onClose }) {
+/* ------------------------------------------------------------------ */
+/* FINALISASI HARGA                                                    */
+/* ------------------------------------------------------------------ */
+/*
+ * Layanan ber-harga-rentang (Repaint 80.000-150.000) dicatat dari harga
+ * terendah saat pelanggan booking. Angka itu belum final -- Dickson di outlet
+ * baru bisa dilihat setelah barangnya ada di tangan teknisi. Bagian ini
+ * mengubahnya, dan backend otomatis menghitung ulang komisi teknisi karena
+ * komisi selalu 50% dari harga yang berlaku.
+ *
+ * Sengaja TIDAK ditampilkan kalau status sudah "Siap diambil": barang sudah
+ * diambil, uang sudah masuk, dan mengubah harga saat itu membuat laporan
+ * pendapatan tidak cocok dengan realita. Backend juga menolak, jadi UI
+ * duduk di depan aturan yang sama.
+ */
+function FinalisasiHarga({ transaksi, onTersimpan }) {
+  const [terbuka, setTerbuka] = useState(false)
+  const [harga, setHarga] = useState(String(transaksi.harga ?? ''))
+  const [alasan, setAlasan] = useState('')
+  const [simpan, setSimpan] = useState(false)
+  const [error, setError] = useState('')
+
+  const t = transaksi
+  const terkunci = t.status === 'Siap diambil'
+  const sudahFinal = !adaRentang(t.shoe?.harga_min, t.shoe?.harga_max)
+
+  if (terkunci || sudahFinal) return null
+
+  const kirim = async () => {
+    const angka = Number(harga)
+    if (!Number.isFinite(angka) || angka < 0) {
+      setError('Harga harus berupa angka dan tidak boleh negatif')
+      return
+    }
+    setError('')
+    setSimpan(true)
+    try {
+      const { data } = await transactionsApi.setHarga(t.id, angka, alasan.trim() || undefined)
+      toast.success('Harga final disimpan', `Komisi teknisi dihitung ulang jadi ${formatRupiah(Math.floor(angka / 2))}.`)
+      setTerbuka(false)
+      setAlasan('')
+      onTersimpan(data)
+    } catch (err) {
+      setError(err.friendlyMessage || err.message)
+    } finally {
+      setSimpan(false)
+    }
+  }
+
+  const bawah = t.shoe?.harga_min ?? 0
+  const atas = t.shoe?.harga_max ?? 0
+
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-amber-900">Harga final belum ditetapkan</p>
+          <p className="text-xs text-amber-800 mt-0.5">
+            Layanan ini punya rentang {formatRupiah(bawah)} - {formatRupiah(atas)}. Yang tercatat
+            sekarang {formatRupiah(t.harga)} (harga terendah).
+          </p>
+        </div>
+        {!terbuka && (
+          <button onClick={() => setTerbuka(true)} className="btn-primary text-sm px-3 py-2 shrink-0">
+            Tetapkan Harga
+          </button>
+        )}
+      </div>
+
+      {terbuka && (
+        <div className="mt-4 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Harga final" required error={error}>
+              <input
+                type="number"
+                min="0"
+                step="1000"
+                value={harga}
+                onChange={(e) => setHarga(e.target.value)}
+                className={cn('input', error && 'input-error')}
+                placeholder={String(atas)}
+              />
+            </Field>
+            <Field label="Alasan (opsional)" hint="Tercatat di catatan teknisi">
+              <input
+                type="text"
+                value={alasan}
+                onChange={(e) => setAlasan(e.target.value)}
+                className="input"
+                placeholder="Contoh: area repaint 20 cm"
+              />
+            </Field>
+          </div>
+          <p className="text-xs text-amber-800">
+            Di luar rentang? Boleh, tapi pastikan alasannya jelas.{' '}
+            {Number(harga) >= bawah && Number(harga) <= atas
+              ? 'Harga ini masih di dalam rentang daftar.'
+              : 'Harga ini di luar rentang daftar.'}
+          </p>
+          <div className="flex gap-2">
+            <button onClick={kirim} disabled={simpan} className="btn-primary text-sm px-3 py-2">
+              {simpan && <Loader2 className="h-4 w-4 animate-spin" />}
+              Simpan
+            </button>
+            <button
+              onClick={() => {
+                setTerbuka(false)
+                setError('')
+              }}
+              disabled={simpan}
+              className="btn-secondary text-sm px-3 py-2"
+            >
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
   if (!transaksi) return null
   const t = transaksi
   const cfg = getStatusConfig(t.status)
@@ -422,10 +558,11 @@ function DetailTransaksi({ transaksi, onClose }) {
           </div>
 
           <div className="space-y-1">
-            <p className="section-title mb-2">Sepatu & Teknisi</p>
+            <p className="section-title mb-2">Layanan & Teknisi</p>
             <div className="divide-y divide-slate-100">
-              <Baris label="Merk" nilai={t.shoe?.merk} />
-              <Baris label="Model" nilai={t.shoe?.model} />
+              <Baris label="Layanan" nilai={t.shoe?.merk} />
+              <Baris label="Varian" nilai={t.shoe?.model} />
+              <Baris label="Kelompok" nilai={t.shoe?.kelompok} />
               <Baris label="Treatment" nilai={t.shoe?.jenis_treatment} />
               <Baris label="Teknisi" nilai={t.tech?.full_name} />
             </div>
@@ -444,6 +581,9 @@ function DetailTransaksi({ transaksi, onClose }) {
               label="Sisa untuk outlet"
               nilai={formatRupiah((t.harga || 0) - (t.tech_commission || 0))}
             />
+          </div>
+          <div className="mt-3">
+            <FinalisasiHarga transaksi={t} onTersimpan={onTersimpan} />
           </div>
         </div>
 

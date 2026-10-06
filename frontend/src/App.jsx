@@ -8,7 +8,6 @@ import AdminDashboard from './components/AdminDashboard'
 import LoginModal from './components/LoginModal'
 import StatusTracker from './components/StatusTracker'
 import LogoutConfirm from './components/LogoutConfirm'
-import AnalyticsSummary from './components/AnalyticsSummary'
 import TeknisiPage from './components/TeknisiPage'
 import DropPointPage from './components/DropPointPage'
 import CustomerAccount from './components/CustomerAccount'
@@ -226,16 +225,12 @@ function ProtectedRoute({ children, allowedRoles }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Dashboard admin -- bungkus analytics + tabel statistik yang sudah ada */
-/* ------------------------------------------------------------------ */
+/* Dashboard admin -- AdminDashboard sudah berisi grafik, tabel statistik,
+   dan panel ringkasan AI, jadi di sini tidak perlu komponen lain.
+   ------------------------------------------------------------------ */
 
 function AdminHome() {
-  return (
-    <div className="space-y-6">
-      <AnalyticsSummary />
-      <AdminDashboard />
-    </div>
-  )
+  return <AdminDashboard />
 }
 
 /* ------------------------------------------------------------------ */

@@ -12,6 +12,7 @@ import {
 import { transactionsApi, shoesApi, dropPointsApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { getStatusConfig, formatRupiah, formatDateTime, cn } from '../utils/helpers'
+import { SearchInput } from './AdminUi'
 
 /**
  * Halaman Mitra Drop Point.
@@ -173,15 +174,11 @@ export default function DropPointPage() {
 
       {/* Cari & filter */}
       <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-          <input
-            type="search"
+        <div className="flex-1">
+          <SearchInput
             value={cari}
-            onChange={(e) => setCari(e.target.value)}
-            placeholder="Cari nomor booking atau nama sepatu…"
-            className="input pl-9"
-            aria-label="Cari transaksi"
+            onChange={setCari}
+            placeholder="Cari nomor booking atau nama sepatu..."
           />
         </div>
         <button onClick={muat} className="btn-secondary flex-shrink-0">

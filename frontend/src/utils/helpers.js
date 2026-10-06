@@ -8,6 +8,51 @@ export function formatRupiah(amount) {
   }).format(amount)
 }
 
+/**
+ * Format harga dengan rentang.
+ *
+ * Layanan seperti Repaint punya harga 80.000 - 150.000. Menampilkan dua angka
+ * tanpa penjelasan bikin pelanggan mengira ada dua layanan berbeda, jadi
+ * rentang selalu diberi label "mulai dari" supaya jelas harga akhirnya
+ * ditentukan setelah shoes dicek di outlet.
+ *
+ * Kalau min == max (atau max tidak diisi), hasilnya sama persis dengan
+ * formatRupiah supaya tampilan tidak bolong-bolong berbeda antara layanan
+ * ber-harga-tunggal dan ber-rentang.
+ */
+export function formatRentang(min, max) {
+  const bawah = Number(min)
+  const atas = Number(max)
+  if (!Number.isFinite(bawah)) return formatRupiah(0)
+  if (!Number.isFinite(atas) || atas === bawah) return formatRupiah(bawah)
+  return `${formatRupiah(bawah)} - ${formatRupiah(atas)}`
+}
+
+/** True kalau layanan punya rentang harga (bukan harga tunggal). */
+export function adaRentang(min, max) {
+  const bawah = Number(min)
+  const atas = Number(max)
+  return Number.isFinite(bawah) && Number.isFinite(atas) && atas > bawah
+}
+
+/**
+ * Harga yang ditampilkan untuk satu layanan.
+ *
+ * Dipakai bersama oleh katalog dan modal booking supaya keduanya tidak pernah
+ * menampilkan angka berbeda untuk baris yang sama.
+ */
+export function hargaLayanan(layanan) {
+  if (!layanan) return { teks: formatRupiah(0), rentang: false, jumlah: 0 }
+  const min = layanan.harga_min ?? layanan.harga_cuci
+  const maks = layanan.harga_max
+  const rentang = adaRentang(min, maks)
+  return {
+    teks: rentang ? formatRentang(min, maks) : formatRupiah(min),
+    rentang,
+    jumlah: Number(min) || 0,
+  }
+}
+
 export function formatDate(dateString) {
   if (!dateString) return '-'
   return new Date(dateString).toLocaleDateString('id-ID', {

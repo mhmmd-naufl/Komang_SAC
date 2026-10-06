@@ -40,12 +40,14 @@ frontend/             React + Vite + Tailwind
                      TeknisiPage, DropPointPage, CustomerAccount,
                      Pagination, AdminUi, Toast
   src/components/admin/
-                     AdminShoes, AdminTransaksi, AdminStock, AdminUsers
+                     AdminShoes, AdminTransaksi, AdminStock, AdminUsers,
+                      PilihPeriode (pemilih bulan/tahun), Grafik (batang + horizontal)
   src/contexts/      AuthContext
   src/hooks/         useTabel.js (paginasi + filter + debounce pencarian)
   src/services/      api.js (axios + interceptor + ambilBerpaginan)
   src/utils/         helpers.js (formatRupiah, formatDate, getStatusConfig),
-                     csv.js (ekspor CSV + ambil semua hasil filter)
+                     csv.js (ekspor CSV + ambil semua hasil filter),
+                      periode.js (preset + rentang tanggal laporan)
 
 blueprint.md          Stack, pola skema, design token
 prd.md                Spesifikasi fitur per role
@@ -157,6 +159,20 @@ Membuat 1 admin, 3 teknisi, 1 drop point, 5 konsumen, 8 master layanan + harga,
 7 item stock, dan 11 transaksi yang tersebar di 5 status — supaya dashboard,
 filter, dan halaman tracking langsung kelihatan terisi.
 
+### 4c. Isi daftar harga asli (WAJIK sebelum dipakai)
+
+```bash
+python seed_pricelist.py --dry-run   # lihat dulu, tidak menulis apa pun
+python seed_pricelist.py            # tulis 27 layanan asli Komang SAC
+```
+
+Mengisi 27 layanan dalam 3 kelompok katalog (Cuci Sepatu / Bag, Hat & Helmet /
+Repaint & Reglue) beserta rentang harganya. Idempoten — aman dijalankan berulang,
+dan tidak menimpa layanan yang sudah diubah manual dari panel admin.
+
+> **Wajib dijalankan setelah `migrate.sql`**, karena script ini butuh kolom
+> `harga_min`, `harga_max`, dan `kelompok` yang ditambahkan oleh migrasi.
+
 Password semua akun dummy: `password123`
 
 | Nomor | Peran |
@@ -255,11 +271,12 @@ Script yang tersedia:
 | GET          | `/api/drop-points/{id}`          | —             | Detail satu mitra                                              |
 | GET          | `/api/transaksi/tracking/{kode}` | —             | Cek status publik (`KS-XXXXXX`)                                |
 | POST         | `/api/transaksi`                 | JWT           | Buat booking. Konsumen = atas namanya sendiri                  |
-| GET          | `/api/transaksi`                 | JWT           | Konsumen: miliknya. Teknisi: tugasnya. Admin/mitra: semua      |
+| GET          | `/api/transaksi`                 | JWT           | Konsumen: miliknya. Teknisi: tugasnya. Admin/mitra: semua. `dari_selesai`/`sampai_selesai` untuk laporan (berbeda dari `dari`/`sampai` yang memakai tanggal masuk)      |
 | GET          | `/api/transaksi/{id}`            | JWT           | Hanya pemilik/teknisi/admin                                    |
-| PUT          | `/api/transaksi/{id}/status`     | teknisi/admin  | Update status. Wajib `photo_after` untuk Selesai/Siap diambil   |
-| GET          | `/api/stats/admin`               | admin         | Agregat dashboard                                              |
-| GET          | `/api/analytics/summary`         | admin         | Ringkasan AI + angka agregat (fallback otomatis)               |
+| PUT          | `/api/transaksi/{id}/status`     | teknisi/admin  | Update status. Wajib `photo_after` untuk Selesai/Siap diambil. Backend mencatat `selesai_at` saat status jadi Selesai   |
+| PUT          | `/api/transaksi/{id}/harga`       | admin          | Finalisasi harga untuk layanan ber-rentang. Hitung ulang `tech_commission`   |
+| GET          | `/api/stats/admin`               | admin         | Agregat dashboard. `?periode=bulan&bulan=10&tahun=2026` atau `?periode=tahun&tahun=2026` atau `?periode=semua`                                              |
+| GET          | `/api/analytics/summary`         | admin         | Ringkasan + saran AI (fallback otomatis) + fakta untuk grafik. Parameter periode sama dengan `/api/stats/admin`               |
 | POST/PUT/    | `/api/sepatu`                    | admin         | Kelola master layanan & harga                                  |
 | DELETE       | `/api/sepatu/{id}`               | admin         | Hapus layanan. 409 kalau masih dipakai transaksi                |
 | GET          | `/api/stock`                     | admin/teknisi | `?low_stock=true` untuk item menipis                            |
@@ -373,10 +390,92 @@ tampak dan tidak bisa dihidupkan kembali.
 
 ---
 
+## Laporan per Bulan / Tahun
+
+Dashboard admin bisa dilihat per **bulan** atau **tahun**, lewat pemilih periode
+di bagian atas. Empat preset cepat: *Bulan ini*, *Bulan lalu*, *Tahun ini*,
+*Semua waktu* — plus pemilih bulan/tahun untuk periode lain.
+
+### Semua angka dihitung dari tanggal SELESAI
+
+Kolom `transactions.selesai_at` diisi backend otomatis saat teknisi mengubah
+status ke **Selesai**. Kolom ini yang dipakai untuk laporan, bukan `created_at`.
+
+Alasannya praktis: pemilik mau tahu "bulan ini dapat berapa". Cucian yang masuk
+tanggal 31 dan selesai tanggal 2 adalah hasil bulan 2. Kalau dihitung dari
+`created_at`, omzet bulan 1 akan kena tambahan dan bulan 2 akan berkurang.
+
+Akibatnya, transaksi yang masih di tahap awal (Diterima/Diproses/Diperiksa)
+**tidak** dihitung sebagai omzet periode mana pun. Jumlahnya tetap dilaporkan
+terpisah sebagai "masih dikerjakan".
+
+### Dua pasangan filter tanggal di `/api/transaksi`
+
+| Parameter | Kolom | Dipakai untuk |
+|---|---|---|
+| `dari` / `sampai` | `created_at` | Melihat antrean: "yang masuk sejak tanggal berapa" |
+| `dari_selesai` / `sampai_selesai` | `selesai_at` | Laporan: "yang selesai di bulan ini" |
+
+Keduanya sengaja **tidak** digabung. Kalau dipakai bersama-sama, hasilnya baris
+yang masuk DAN selesai di rentang itu — untuk laporan omzet itu salah, karena
+cucian yang masuk bulan lalu lalu selesai bulan ini harus ikut dihitung bulan ini.
+
+Batas atas `sampai_selesai` **eksklusif** (menunjuk ke 1 pukul 00:00 periode
+berikutnya), karena backend membandingkannya dengan `lt()`. Kalau mengirim
+tanggal terakhir periode, transaksi yang selesai tepat tengah malam tanggal 1
+akan hilang dari laporan.
+
+### Parameter periode di stats & analytics
+
+`/api/stats/admin` dan `/api/analytics/summary` menerima parameter yang sama:
+
+| Parameter | Arti |
+|---|---|
+| `periode=bulan&bulan=10&tahun=2026` | Satu bulan, grafik per **hari** |
+| `periode=tahun&tahun=2026` | Satu tahun, grafik per **bulan** |
+| `periode=semua` | Seluruh riwayat, grafik per **bulan** |
+
+Granularitas grafik mengikuti periode: satu bulan → per hari, satu tahun →
+per bulan. Bucket harian/bulanan dihitung di zona **WIB** (UTC+7) supaya
+transaksi yang selesai lewat tengah malam tidak masuk tanggal yang salah.
+
+### Ekspor CSV
+
+Tiga tombol ekspor di dashboard, masing-masing menghasilkan satu berkas CSV:
+
+| Tombol | Isi |
+|---|---|
+| **Ringkasan** | Angka KPI periode (omzet, komisi, sisa untuk outlet, dst.) |
+| **Tren** | Deret harian/bulanan: label, jumlah pekerjaan, omzet |
+| **Transaksi** | Semua transaksi yang selesai di periode ini (dengan tanggal selesai) |
+
+Berkas CSV memakai BOM UTF-8 supaya Excel di Windows membaca karakter non-ASCII
+dengan benar, dan nilai yang mengandung koma dibungkus tanda kutip sesuai
+RFC 4180.
+
+---
+
 ## Ringkasan AI (OpenRouter)
 
-Panel admin menampilkan analisis 14 hari terakhir: tren omzet, layanan
-terlaris, beban kerja per teknisi, stok kritis, dan pekerjaan yang tertahan.
+**AI HANYA untuk dua hal: RINGKASAN dan SARAN.** Itu saja.
+
+Semua angka, grafik, dan tabel di dashboard dihitung secara deterministik di
+`analytics.py` — tidak pernah lewat model bahasa. Alasannya:
+
+1. Angka dari LLM bisa berbeda antara dua pemanggilan untuk data yang sama,
+   jadi dashboard yang "berubah sendiri" saat di-refresh tidak bisa dipercaya
+   untuk menghitung bayar teknisi.
+2. Model gratis bisa lambat atau mati. Kalau grafik ikut bergantung padanya,
+   satu timeout membuat separuh dashboard kosong.
+3. Batas token. Meminta model menulis JSON angka ratusan baris prone ke
+   hallucination di setiap digit.
+
+Jadi alurnya: `gather_facts` menghitung semuanya secara deterministik, lalu
+OpenRouter HANYA membaca angka-angka itu dan menulis narasi + saran. Kalau
+OpenRouter gagal, `rule_based` menulis versi yang sama dari perhitungan lokal.
+
+Panel AI di dashboard menampilkan narasi (ringkasan) dan daftar berpoin (saran).
+Grafik, kartu angka, dan tabel ada di atasnya — semuanya dari perhitungan lokal.
 
 Dua jalur, dan UI selalu memberi tahu yang mana yang dipakai:
 
@@ -446,7 +545,8 @@ menulis apa pun.
 
 ## Sebelum Deploy
 
-- [ ] Jalankan `migrate.sql` di Supabase
+- [ ] Jalankan `migrate.sql` di Supabase (termasuk kolom `selesai_at`)
+- [ ] Jalankan `python seed_pricelist.py` untuk mengisi 27 layanan asli
 - [ ] Ganti `JWT_SECRET_KEY` di `.env`
 - [ ] Ganti password admin bawaan — `python manage_users.py reset 628980570911 "..."`
 - [ ] Tambahkan secret CI di GitHub (kalau mau uji database jalan di Actions)

@@ -1,0 +1,56 @@
+def _sertakan_kontak(baris: list[dict], user: dict) -> list[dict]:
+    """
+    Tambahkan nama + nomor WhatsApp pelanggan ke setiap transaksi.
+
+    Hanya untuk admin dan drop point. Konsumen tidak butuh (itu datanya sendiri)
+    dan teknisi tidak boleh -- supaya daftar telepon pelanggan tidak bocor ke
+    perangkat teknisi.
+    """
+    if user.get("role") not in _PERAN_BISA_LIHAT_KONTAK or not baris:
+        return baris
+
+    owner_ids = {r.get("user_id") for r in baris if r.get("user_id")}
+    if not owner_ids:
+        return baris
+
+    pelanggan = (
+        supabase.from_("profiles")
+        .select("id, full_name, phone")
+        .in_("id", list(owner_ids))
+        .execute().data or []
+    )
+    peta = {p["id"]: p for p in pelanggan}
+
+    return [
+        {**r, "customer": peta.get(r.get("user_id"))} for r in baris
+    ]
+
+
+def _siapkan_transaksi(baris: list[dict], user: dict) -> list[dict]:
+    """Terapkan seluruh aturan bentuk respons sesuai peran pemohon."""
+    return _sertakan_kontak(_sembunyikan_biaya(baris, user), user)
+
+
+# Kolom master layanan yang ikut di-embed ke transaksi. Dipakai di semua select
+# transaksi supaya kolomnya tidak bolong-bolong di satu endpoint tapi ada di
+# endpoint lain -- dulu kindalah teknis untuk memakai kolom baru, dan itu mudah
+# terlewat karena PostgREST diam-diam mengembalikan null untuk kolom yang
+# tidak disebut.
+_KOLOM_SHOE = "id, merk, model, kelompok, jenis_treatment, keterangan_treatment, harga_min, harga_max"
+
+
+# ==========================================
+# PAGINASI & PENCARIAN
+# ==========================================
+#
+# Format: response tetap berupa JSON list (supaya tidak membongkar konsumen
+# lama), jumlah total dikirim lewat header X-Total-Count / X-Total-Pages.
+#
+# Endpoint tanpa parameter `page` tetap mengembalikan seluruh baris seperti
+# sebelumnya -- jadi katalog publik, booking, dan halaman status tidak ikut
+# berubah. Hanya halaman admin yang lewat paginasi.
+
+PER_PAGE_DEFAULT = 25
+PER_PAGE_MAKS = 200
+
+HEADE

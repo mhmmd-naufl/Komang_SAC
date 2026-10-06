@@ -353,7 +353,11 @@ export default function LoginModal() {
   /* ---------------------------------------------------------------- */
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+    // flex-col WAJIB di sini.
+    // Tanpa itu, "Kembali ke beranda" menjadi saudara mendatar dari kartu dan
+    // ikut terjepit oleh justify-center -- ruangnya habis, link terpotong jadi
+    // setengah atau hilang total.
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-5 p-4">
       <div className="w-full max-w-4xl grid md:grid-cols-5 rounded-2xl overflow-hidden shadow-lg border border-slate-200">
         {/* Panel kiri — alasan daftar */}
         <div className="md:col-span-2 bg-primary-700 text-white p-8 flex flex-col">

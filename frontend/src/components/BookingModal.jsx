@@ -1,16 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { X, CheckCircle, Clock, User, Footprints, MapPin, MessageSquare } from 'lucide-react'
 import { transactionsApi, dropPointsApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { toast } from './Toast'
-import { formatRupiah, cn } from '../utils/helpers'
+import { formatRupiah, hargaLayanan, cn } from '../utils/helpers'
 
-const TREATMENTS = [
-  { value: 'Standar', label: 'Standar', desc: 'Cuci standar + pengeringan' },
-  { value: 'Premium', label: 'Premium', desc: 'Cuci + pemutih + conditioning' },
-  { value: 'Steri', label: 'Steri', desc: 'Cuci steril + anti bakteri' },
-  { value: 'Waterproof', label: 'Waterproof', desc: 'Cuci + coating waterproof' },
-]
+// DAFTAR TREATMENT TIDAK ADA DI SINI, dan itu disengaja.
+// Dulu ada tombol pilihan "Standar / Premium / Steri / Waterproof" yang
+// disconnected: nilainya tidak pernah dikirim ke backend, dan backend pun
+// mengambil harga dari master shoes. Akibatnya pelanggan bisa memilih
+// "Waterproof" lalu ditagih harga cuci biasa.
+// Sekarang treatment ikut dari layanan yang dipilih di katalog, dan yang tampil
+// hanya informasinya -- read-only. Kalau treatment mau diubah, pilih layanan
+// lain di katalog, jangan mengarang harga sendiri.
 
 const PAYMENTS = [
   { value: 'tunai', label: 'Tunai di tempat' },
@@ -42,14 +44,17 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
   const [bookingCode, setBookingCode] = useState(null)
   const [formData, setFormData] = useState({
     drop_point_id: '',
-    treatment: shoe?.jenis_treatment || 'Standar',
     catatan: '',
     payment: 'tunai',
   })
 
+  // Treatment sekarang dibaca dari layanan terpilih, bukan disimpan di state.
+  // Dulu ada `treatment` di formData yang tidak pernah dikirim ke backend,
+  // jadi nilai itu hanya hiasan di UI.
+  const treatment = shoeData?.jenis_treatment || '-'
+
   useEffect(() => {
     setShoeData(shoe)
-    setFormData((prev) => ({ ...prev, treatment: shoe?.jenis_treatment || prev.treatment }))
   }, [shoe])
 
   useEffect(() => {
@@ -97,7 +102,10 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
         user_id: user.id,
         shoe_id: shoeData.id,
         drop_point_id: formData.drop_point_id.startsWith('fallback-') ? null : formData.drop_point_id,
-        harga: shoeData.harga_cuci,
+        // Backend mengabaikan angka ini dan memakai harga master sendiri.
+        // Dikirim harga terendah supaya tidak menyesatkan kalau nanti ada
+        // endpoint lain yang membaca payload ini apa adanya.
+        harga: harga.jumlah,
         catatan_konsumen: formData.catatan || null,
       })
       setBookingCode(data.kode)
@@ -112,6 +120,10 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
   }
 
   const selectedDropPoint = dropPoints.find((dp) => dp.id === formData.drop_point_id)
+
+  // Resolved di satu tempat supaya tampilan harga di langkah 1 dan langkah 2
+  // tidak pernah berbeda untuk layanan yang sama.
+  const harga = useMemo(() => hargaLayanan(shoeData), [shoeData])
 
   /* ---------------------------------------------------------------- */
   /* Step 3 — Sukses                                                    */
@@ -128,6 +140,14 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
             {shoeData?.merk} {shoeData?.model} sudah tercatat. Simpan nomor di bawah untuk
             memantau progres.
           </p>
+
+          {harga.rentang && (
+            <p className="-mt-4 mb-6 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">
+              Layanan ini ber-harga rentang, jadi yang tercatat sekarang adalah harga terendah
+              ({formatRupiah(harga.jumlah)}). Admin akan menghubungi kamu lewat WhatsApp untuk
+              mengonfirmasi harga final.
+            </p>
+          )}
 
           <div className="bg-primary-50 border border-primary-100 rounded-xl p-5 mb-6">
             <p className="text-xs text-slate-500 mb-1">Nomor Booking</p>
@@ -157,7 +177,7 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
         {/* Header */}
         <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">Booking Cuci Sepatu</h2>
+            <h2 className="text-lg font-bold text-slate-900">Booking Layanan</h2>
             <p className="text-sm text-slate-500">Langkah {step} dari 2</p>
           </div>
           <button
@@ -209,10 +229,28 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
                       <h3 className="font-medium text-slate-900">
                         {shoeData.merk} {shoeData.model || ''}
                       </h3>
-                      <p className="text-sm text-slate-500">{shoeData.keterangan_treatment}</p>
-                      <p className="text-sm font-semibold text-primary-700 mt-1">
-                        {formatRupiah(shoeData.harga_cuci)} / pasang
-                      </p>
+                      {shoeData.jenis_treatment && (
+                        <span className="inline-block px-2 py-0.5 mt-1 text-xs font-medium bg-primary-100 text-primary-700 rounded-full">
+                          {shoeData.jenis_treatment}
+                        </span>
+                      )}
+                      {shoeData.keterangan_treatment && (
+                        <p className="text-sm text-slate-500 mt-1">{shoeData.keterangan_treatment}</p>
+                      )}
+                      <div className="mt-1">
+                        {harga.rentang ? (
+                          <>
+                            <p className="text-sm font-semibold text-primary-700">{harga.teks}</p>
+                            <p className="text-xs text-slate-500">
+                              Harga final ditentukan setelah shoes dicek di outlet.
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-sm font-semibold text-primary-700">
+                            {formatRupiah(harga.jumlah)}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -246,26 +284,13 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
 
               <div>
                 <span className="label">Jenis Treatment</span>
-                <div className="grid grid-cols-2 gap-2">
-                  {TREATMENTS.map((t) => (
-                    <button
-                      key={t.value}
-                      type="button"
-                      onClick={() => setFormData((p) => ({ ...p, treatment: t.value }))}
-                      className={cn(
-                        'p-3 rounded-xl border text-left transition-colors',
-                        formData.treatment === t.value
-                          ? 'border-primary-600 bg-primary-50'
-                          : 'border-slate-200 hover:bg-slate-50'
-                      )}
-                    >
-                      <span className={cn('block text-sm font-medium', formData.treatment === t.value ? 'text-primary-700' : 'text-slate-900')}>
-                        {t.label}
-                      </span>
-                      <span className="block text-xs text-slate-500 mt-0.5">{t.desc}</span>
-                    </button>
-                  ))}
-                </div>
+                <p className="px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-700">
+                  {treatment}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Treatment mengikuti layanan yang dipilih. Mau treatment lain? Tutup dulu lalu pilih
+                  layanan lain di katalog.
+                </p>
               </div>
 
               <div>
@@ -312,25 +337,30 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
               <div className="space-y-4">
                 <div className="card p-4 bg-primary-50 border-primary-100">
                   <h3 className="font-medium text-slate-900 mb-3 flex items-center gap-2">
-                    <Footprints className="h-5 w-5 text-primary-600" /> Detail Sepatu
+                    <Footprints className="h-5 w-5 text-primary-600" /> Detail Layanan
                   </h3>
                   <dl className="grid grid-cols-2 gap-3 text-sm">
                     <div>
-                      <dt className="text-slate-500">Merk</dt>
+                      <dt className="text-slate-500">Layanan</dt>
                       <dd className="font-medium">{shoeData?.merk}</dd>
                     </div>
                     <div>
-                      <dt className="text-slate-500">Model</dt>
+                      <dt className="text-slate-500">Varian</dt>
                       <dd className="font-medium">{shoeData?.model || '-'}</dd>
                     </div>
                     <div>
                       <dt className="text-slate-500">Treatment</dt>
-                      <dd className="font-medium">{formData.treatment}</dd>
+                      <dd className="font-medium">{treatment}</dd>
                     </div>
                     <div>
-                      <dt className="text-slate-500">Biaya</dt>
+                      <dt className="text-slate-500">{harga.rentang ? 'Rentang Biaya' : 'Biaya'}</dt>
                       <dd className="font-medium text-primary-700">
-                        {formatRupiah(shoeData?.harga_cuci)}
+                        {harga.teks}
+                        {harga.rentang && (
+                          <span className="block text-xs font-normal text-slate-500">
+                            final setelah cek di outlet
+                          </span>
+                        )}
                       </dd>
                     </div>
                   </dl>
@@ -377,6 +407,12 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
                   </h3>
                   <ul className="text-sm text-slate-600 space-y-1">
                     <li>• Estimasi pengerjaan 2–3 hari kerja.</li>
+                    {harga.rentang && (
+                      <li>
+                        • Layanan ini punya rentang harga. Admin akan mengabari harga final lewat
+                        WhatsApp setelah shoes dicek.
+                      </li>
+                    )}
                     <li>• Teknisi wajib foto kondisi sebelum & sesudah.</li>
                     <li>• Simpan nomor booking untuk memantau progres.</li>
                   </ul>

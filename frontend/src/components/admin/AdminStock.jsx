@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { AlertTriangle, Loader2, Minus, Pencil, Plus, Search } from 'lucide-react'
+import { AlertTriangle, Loader2, Minus, Pencil, Plus } from 'lucide-react'
 import { stockApi } from '../../services/api'
 import { useCariTunda, useTabel } from '../../hooks/useTabel'
 import { cn, formatDate, formatRupiah } from '../../utils/helpers'
 import { toast } from '../Toast'
 import Pagination from '../Pagination'
-import Modal, { Field, GagalMuat, Kosong, Memuat } from '../AdminUi'
+import Modal, { Field, GagalMuat, Kosong, Memuat, SearchInput } from '../AdminUi'
 
 const TIPE = [
   { nilai: 'alat', label: 'Alat' },
@@ -300,15 +300,11 @@ export default function AdminStock() {
 
       <div className="card overflow-hidden">
         <div className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="relative flex-1 lg:max-w-xs">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-            <input
-              type="search"
+          <div className="flex-1 lg:max-w-xs">
+            <SearchInput
               value={cari}
-              onChange={(e) => setCari(e.target.value)}
+              onChange={setCari}
               placeholder="Cari nama item..."
-              className="input pl-9"
-              aria-label="Cari nama item"
             />
           </div>
 
