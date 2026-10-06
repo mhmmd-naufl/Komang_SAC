@@ -13,12 +13,19 @@ import { ambilBerpaginan } from '../services/api'
  *
  * Filter bernilai kosong dibuang sebelum dikirim supaya tidak jadi
  * `?q=&status=` yang membingungkan backend.
+ *
+ * PENTING: nilai boolean `false` TIDAK boleh ikut dibuang. `aktif_only=false`
+ * berarti "tampilkan yang nonaktif", sedangkan `low_stock=false` berarti
+ * "jangan difilter". Kalau `false` ikut hilang, permintaan dikirim tanpa
+ * parameter itu dan backend memakai default-nya -- jadi tab "Nonaktif"
+ * diam-diam menampilkan semua sepatu aktif. Pakai `undefined` untuk
+ * benar-benar tidak mengirim parameter.
  */
 
 /** Buang nilai kosong supaya query string tetap rapi. */
 function bersihkan(params) {
   return Object.fromEntries(
-    Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined && v !== false),
+    Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined),
   )
 }
 

@@ -326,7 +326,10 @@ Dua hal penting soal ini:
   `PGRST103` kalau offset melewati jumlah baris; tanpa clamp, admin yang
   sedang di halaman 5 lalu_LOW_ tanpa sengaja akan membuat seluruh panel error.
 - **Nilai kosong dibuang.** `?q=&status=` tidak pernah dikirim, supaya
-  `q` berisi spasi tidak ikut Zer폭 search sia-sia.
+  `q` berisi spasi tidak memicu pencarian sia-sia. Nilai boolean `false`
+  sengaja **tidak** ikut dibuang, karena `aktif_only=false` berarti
+  "jangan pakai default" — membuangnya membuat tab "Nonaktif" diam-diam
+  menampilkan semua data aktif.
 
 `expose_headers` di `main.py` wajib diisi agar browser bisa membaca header
 tersebut dari JavaScript. Tanpa itu, server mengirimnya tapi JavaScript tetap
@@ -345,7 +348,23 @@ Tanpa itu, mengetik `60 (besar)` merusak logic tree-nya dan seluruh
 permintaan gagal dengan `PGRST100`.
 
 Filter tambahan: `status`, `urut`, `dari`/`sampai` (transaksi), `tipe`,
-`low_stock` (stok), `role` (pengguna), `aktif_only` (sepatu, drop point).
+`low_stock` (stok), `role` (pengguna), `aktif_only` + `cari_status`
+(sepatu, drop point).
+
+### Dua filter status yang sering tertukar
+
+`/api/sepatu` punya dua cara memfilter status, dan bedanya penting:
+
+| Yang dikirim | Arti | Dipakai oleh |
+|---|---|---|
+| *(tidak ada apa-apa)* | hanya yang **aktif** (default endpoint) | katalog publik |
+| `aktif_only=false` | **semua**, aktif dan nonaktif | panel admin, tab "Semua" |
+| `aktif_only=true` | hanya yang aktif | panel admin, tab "Aktif" |
+| `cari_status=false` | hanya yang **nonaktif** | panel admin, tab "Nonaktif" |
+
+Karena `aktif_only` default-nya `True`, panel admin **wajib** mengirim
+`aktif_only=false` — kalau tidak, master yang dinonaktifkan tidak akan pernah
+tampak dan tidak bisa dihidupkan kembali.
 
 > `low_stock` sengaja difilter lewat daftar id, bukan di Python. Kalau
 > filtering dilakukan setelah data diambil, `X-Total-Count` jadi tidak sinkron

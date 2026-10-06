@@ -739,6 +739,7 @@ def create_sepatu(sepatu: ShoeCreate, _: dict = Depends(require_role("admin"))):
 def list_sepatu(
     response: Response,
     aktif_only: bool = True,
+    cari_status: Optional[bool] = None,
     q: Optional[str] = None,
     page: Optional[int] = None,
     per_page: Optional[int] = None,
@@ -747,11 +748,17 @@ def list_sepatu(
     Master sepatu. Tetap publik: daftar harga memang meant dibaca siapa saja,
     dan endpoint ini sudah terbuka sejak awal.
 
-    `aktif_only` default True supaya katalog publik tidak menampilkan layanan
-    yang dinonaktifkan. Panel admin mengirim `aktif_only=false` supaya bisa
-    melihat dan menghidupkan kembali layanan nonaktif.
+    Dua filter status yang berbeda, sering tertukar:
 
-    Tanpa `page`, seluruh baris dikembalikan (perilaku lama).
+    - `aktif_only=true` (default) -> hanya yang aktif. Ini yang dipakai katalog
+      publik supaya layanan yang dinonaktifkan tidak bocor ke pelanggan.
+    - `cari_status=false` -> hanya yang NONAKTIF. Ini yang dipakai panel admin
+      supaya ia bisa menemukan layanan yang perlu dihidupkan kembali.
+
+    Panel admin yang mau melihat semuanya mengirim keduanya: `aktif_only=false`
+    (supaya tidak ada filter) dan `cari_status` tidak diisi sama sekali.
+    Kalau `aktif_only` tidak dikirim, default True diam-diam menyembunyikan
+    layanan nonaktif -- persis yang tidak diinginkan di panel admin.
     """
     cari = _cari_teks(q)
 
@@ -759,6 +766,8 @@ def list_sepatu(
         query = supabase.from_("shoes").select("*", count="exact")
         if aktif_only:
             query = query.eq("status", True)
+        if cari_status is not None:
+            query = query.eq("status", cari_status)
         if cari:
             query = query.or_(
                 ",".join([_pola_ilike("merk", cari), _pola_ilike("model", cari)])

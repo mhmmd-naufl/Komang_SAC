@@ -51,7 +51,11 @@ function formDariBaris(baris) {
 }
 
 export default function AdminShoes() {
-  const tabel = useTabel({ endpoint: '/api/sepatu' })
+  // Default panel admin adalah tab "Semua", jadi harus membaca master nonaktif
+  // juga -- kalau tidak, layanan yang dinonaktifkan tidak akan pernah terlihat
+  // untuk dihidupkan kembali. Endpoint tanpa parameter justru hanya mengembalikan
+  // yang aktif.
+  const tabel = useTabel({ endpoint: '/api/sepatu', filterAwal: { aktif_only: false } })
   const { setFilter } = tabel
   const [cari, setCari] = useCariTunda(setFilter)
 
@@ -63,7 +67,16 @@ export default function AdminShoes() {
 
   const gantiTabStatus = (nilai) => {
     setTabStatus(nilai)
-    setFilter({ aktif_only: nilai === 'semua' ? undefined : nilai === 'aktif' })
+    if (nilai === 'semua') {
+      // Tanpa filter sama sekali: aktif_only=false berarti "jangan pakai
+      // default True", cari_status tidak dikirim berarti "tidak cares status".
+      setFilter({ aktif_only: false, cari_status: undefined })
+    } else {
+      setFilter({
+        aktif_only: nilai === 'aktif',
+        cari_status: nilai === 'nonaktif' ? false : undefined,
+      })
+    }
   }
 
   const bukaTambah = () => {

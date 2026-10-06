@@ -1,0 +1,20 @@
+fix: tab status master sepatu salah, dan jangan buang boolean false saat filter
+
+Dua bug bertumpuk di panel admin Kelola Sepatu, keduanya membuat tab
+"Nonaktif" menampilkan data yang salah tanpa报错:
+
+- useTabel membuang nilai boolean false dari filter sebelum dikirim. Untuk
+  parameter boolean itu berarti "jangan pakai default", dan membuangnya membuat
+  backend memakai default-nya sendiri. Sekarang hanya '', null, dan undefined
+  yang dibuang; pakai undefined untuk benar-benar tidak mengirim parameter
+- tab "Semua" mengirim aktif_only=undefined, dan default endpoint itu True,
+  jadi yang tampil hanya master AKTIF -- bukan semua. Sekarang dikirim
+  aktif_only=false
+
+Ditambah filter baru cari_status di /api/sepatu untuk tab "Nonaktif"
+(sekarang isinya sama dengan tab "Aktif", jadi tidak berguna). admin_sepatu
+juga mengirim aktif_only=false sebagai filter awal supaya master nonaktif
+terlihat dan bisa dihidupkan kembali.
+
+Test: 99 lulus, 0 gagal (dari 96). Tiga jalur filter status sudah diuji
+terpisah, termasuk invariant Aktif + Nonaktif = Semua.

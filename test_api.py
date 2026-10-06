@@ -428,6 +428,23 @@ if tokens.get("admin"):
     check("katalog bisa melihat master nonaktif untuk admin",
           r.status_code == 200 and r.headers.get("x-total-count") is not None, f"HTTP {r.status_code}")
 
+    # Tiga jalur filter status master sepatu. Panel admin punya tab
+    # Semua / Aktif / Nonaktif, masing-masing harus benar.
+    semua = client.get("/api/sepatu", params={"aktif_only": False, "page": 1, "per_page": 100})
+    hanya_aktif = client.get("/api/sepatu", params={"page": 1, "per_page": 100})
+    hanya_nonaktif = client.get("/api/sepatu", params={"cari_status": False, "page": 1, "per_page": 100})
+
+    if semua.status_code == 200 and hanya_aktif.status_code == 200 and hanya_nonaktif.status_code == 200:
+        n_nonaktif = len(hanya_nonaktif.json())
+        check("tab 'Semua' mencakup master nonaktif",
+              len(semua.json()) >= len(hanya_aktif.json()),
+              f"semua={len(semua.json())} aktif={len(hanya_aktif.json())}")
+        check("tab 'Nonaktif' hanya berisi yang statusnya false",
+              all(b["status"] is False for b in hanya_nonaktif.json()), f"n={n_nonaktif}")
+        check("total tab Aktif + Nonaktif = tab Semua",
+              len(hanya_aktif.json()) + n_nonaktif == len(semua.json()),
+              f"{len(hanya_aktif.json())} + {n_nonaktif} != {len(semua.json())}")
+
 
 # =============================================================
 section("14. Relasi nama di respons transaksi")
