@@ -330,7 +330,7 @@ def gather_facts(
         supabase.from_("transactions")
         .select(
             "id, kode, shoe_id, harga, tech_id, status, created_at, selesai_at, "
-            "photo_after, catatan_konsumen, defect_notes"
+            "tech_commission, photo_after, catatan_konsumen, defect_notes"
         )
         .execute().data or []
     ))

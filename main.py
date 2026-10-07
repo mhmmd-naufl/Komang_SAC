@@ -415,9 +415,12 @@ class StatsResponse(BaseModel):
 # HELPER FUNCTIONS
 # ==========================================
 
+# Persentase komisi teknisi (default 40%, bisa diubah lewat env TECHNICIAN_COMMISSION_PERCENT)
+TECHNICIAN_COMMISSION_PERCENT = int(os.getenv("TECHNICIAN_COMMISSION_PERCENT", "40"))
+
 def calculate_commission(harga: int) -> int:
-    """Hitung komisi teknisi 50% dari harga terpasang."""
-    return harga // 2
+    """Hitung komisi teknisi (default 40%) dari harga terpasang."""
+    return int(harga * TECHNICIAN_COMMISSION_PERCENT / 100)
 
 def get_now_iso():
     return datetime.now(timezone.utc).isoformat()
