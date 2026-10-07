@@ -30,13 +30,14 @@ export const NAMA_BULAN = [
 
 /**
  * Periode default saat dashboard dibuka: bulan berjalan (minimal 2026).
+ * Sekarang mendukung multi-select untuk bulan dan tahun.
  */
 export function periodeAwal() {
   const sekarang = new Date()
   const tahunSekarang = sekarang.getFullYear()
   return {
-    bulan: sekarang.getMonth() + 1,
-    tahun: Math.max(sekarang.getFullYear(), 2026),
+    bulan: [sekarang.getMonth() + 1],
+    tahun: [Math.max(sekarang.getFullYear(), 2026)],
   }
 }
 
@@ -45,7 +46,7 @@ export function periodeAwal() {
  *
  * Hasilnya berisi dua kelompok yang harus dikirim ke endpoint berbeda:
  *
- *   - `bulan` / `tahun`  -> /api/stats/admin dan /api/analytics/summary.
+ *   - `bulan` / `tahun` (array)  -> /api/stats/admin dan /api/analytics/summary.
  *     Backend yang menghitung batas bulan/tahun, supaya bucket harian dan
  *     bulannya dijamin sama dengan yang dipakai untuk omzet.
  *   - `selesaiDari` / `selesaiSampai` -> /api/transaksi, untuk daftar
@@ -64,15 +65,20 @@ export function keParameter(nilai) {
   const bulan = nilai.bulan
   const tahun = nilai.tahun
 
-  if (!bulan || !tahun) {
+  if (!bulan || !bulan.length || !tahun || !tahun.length) {
     return { periode: 'semua' }
   }
 
-  const selesaiDari = `${tahun}-${String(bulan).padStart(2, '0')}-01`
+  const bulanMin = Math.min(...bulan)
+  const bulanMax = Math.max(...bulan)
+  const tahunMin = Math.min(...tahun)
+  const tahunMax = Math.max(...tahun)
+
+  const selesaiDari = `${tahun[0]}-${String(bulan[0]).padStart(2, '0')}-01`
   const selesaiSampai =
-    bulan === 12
-      ? `${tahun + 1}-01-01`
-      : `${tahun}-${String(bulan + 1).padStart(2, '0')}-01`
+    bulan.includes(12)
+      ? `${Math.max(...tahun) + 1}-01-01`
+      : `${tahun[Math.max(...bulan) === 12 ? bulan.indexOf(12) : bulan.indexOf(Math.max(...bulan))]}-${String(Math.max(...bulan) + 1).padStart(2, '0')}-01`
 
   return {
     bulan,
@@ -84,8 +90,23 @@ export function keParameter(nilai) {
 
 /** Label periode untuk judul dan nama berkas ekspor. */
 export function labelPeriode(nilai) {
-  const bulan = nilai.bulan || new Date().getMonth() + 1
-  const tahun = nilai.tahun || new Date().getFullYear()
+  if (!nilai.bulan || !nilai.tahun) return 'Semua waktu'
+  const bulan = nilai.bulan[0]
+  const tahun = nilai.tahun[0]
+  const NAMA_BULAN = [
+    'Januari',
+    'Februari',
+    'Maret',
+    'April',
+    'Mei',
+    'Juni',
+    'Juli',
+    'Agustus',
+    'September',
+    'Oktober',
+    'November',
+    'Desember',
+  ]
   return `${NAMA_BULAN[bulan - 1]} ${tahun}`
 }
 

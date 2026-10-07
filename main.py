@@ -189,11 +189,11 @@ class ShoeResponse(ShoeBase):
 
 # --- Transactions (Transaksi Cuci) ---
 class TransactionBase(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None
     shoe_id: str
     tech_id: Optional[str] = None
     drop_point_id: Optional[str] = None
-    harga: int
+    harga: Optional[int] = None
     catatan_konsumen: Optional[str] = None
 
 class TransactionCreate(TransactionBase):
@@ -1450,6 +1450,10 @@ def create_transaksi(transaksi: TransactionCreate, user: dict = Depends(get_curr
     data = transaksi.model_dump()
     if user["role"] == "customer":
         data["user_id"] = user["id"]
+    else:
+        # Admin/teknisi/drop_point boleh create untuk user lain
+        if "user_id" not in data or data.get("user_id") is None:
+            raise HTTPException(400, "user_id wajib diisi untuk role non-customer")
 
     # Harga selalu mengikuti master, jangan dikasih dari client.
     shoe = (
