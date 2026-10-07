@@ -234,7 +234,7 @@ export default function AdminTransaksi() {
         <div>
           <h2 className="text-xl font-bold text-slate-900">Transaksi</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Semua transaksi cuci beserta nilai dan komisi teknisi (50% dari harga daftar).
+            Semua transaksi cuci beserta nilai dan komisi teknisi (40% dari harga daftar).
           </p>
         </div>
         <button onClick={jalankanEkspor} className="btn-secondary shrink-0" disabled={ekspor}>
@@ -397,7 +397,7 @@ function Foto({ label, url, wajib }) {
  * terendah saat pelanggan booking. Angka itu belum final -- Dickson di outlet
  * baru bisa dilihat setelah barangnya ada di tangan teknisi. Bagian ini
  * mengubahnya, dan backend otomatis menghitung ulang komisi teknisi karena
- * komisi selalu 50% dari harga yang berlaku.
+ * komisi selalu 40% dari harga yang berlaku.
  *
  * Sengaja TIDAK ditampilkan kalau status sudah "Siap diambil": barang sudah
  * diambil, uang sudah masuk, dan mengubah harga saat itu membuat laporan
@@ -427,7 +427,7 @@ function FinalisasiHarga({ transaksi, onTersimpan }) {
     setSimpan(true)
     try {
       const { data } = await transactionsApi.setHarga(t.id, angka, alasan.trim() || undefined)
-      toast.success('Harga final disimpan', `Komisi teknisi dihitung ulang jadi ${formatRupiah(Math.floor(angka / 2))}.`)
+      toast.success('Harga final disimpan', `Komisi teknisi dihitung ulang jadi ${formatRupiah(Math.floor(angka * 0.4))}.`)
       setTerbuka(false)
       setAlasan('')
       onTersimpan(data)
@@ -574,7 +574,7 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
           <div className="divide-y divide-slate-100 rounded-xl border border-slate-100 px-4">
             <Baris label="Harga jual" nilai={formatRupiah(t.harga)} />
             <Baris
-              label="Komisi teknisi (50%)"
+              label="Komisi teknisi (40%)"
               nilai={formatRupiah(t.tech_commission)}
             />
             <Baris

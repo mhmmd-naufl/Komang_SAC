@@ -519,7 +519,7 @@ export default function AdminDashboard() {
           <div className="card p-5">
             <div className="flex items-center justify-between mb-1">
               <h2 className="font-semibold text-slate-900">Komisi Teknisi</h2>
-              <span className="text-xs text-slate-500">50% dari harga</span>
+              <span className="text-xs text-slate-500">40% dari harga</span>
             </div>
             <p className="text-xs text-slate-500 mb-4">Per {label}</p>
             <GrafikBatangHorizontal

@@ -8,10 +8,14 @@ import { NAMA_BULAN } from '../../utils/periode'
  *
  * State dikontrol oleh parent via `nilai` (object { bulan: number[], tahun: number[] })
  * dan callback `onGanti({ bulan: number[], tahun: number[] }).
+ *
+ * Perubahan TIDAK langsung diterapkan — user harus klik "Terapkan" dulu.
+ * Ini mencegah dashboard refresh berkali-kali saat user masih memilih.
  */
 export default function PilihPeriode({ nilai, onGanti, className }) {
   const { bulan, tahun } = nilai
   const [buka, setBuka] = useState(false)
+  const [draft, setDraft] = useState({ bulan, tahun })
   const ref = useRef(null)
 
   // Tutup saat klik di luar
@@ -24,18 +28,35 @@ export default function PilihPeriode({ nilai, onGanti, className }) {
     return () => document.removeEventListener('mousedown', handler)
   }, [buka])
 
+  // Sync draft saat nilai berubah dari luar (mis. tombol Reset)
+  useEffect(() => {
+    setDraft({ bulan, tahun })
+  }, [bulan, tahun])
+
   const toggleBulan = (b) => {
-    const baru = bulan.includes(b)
-      ? bulan.filter((x) => x !== b)
-      : [...bulan, b].sort((a, b2) => a - b2)
-    onGanti({ ...nilai, bulan: baru })
+    const baru = draft.bulan.includes(b)
+      ? draft.bulan.filter((x) => x !== b)
+      : [...draft.bulan, b].sort((a, b2) => a - b2)
+    setDraft({ ...draft, bulan: baru })
   }
 
   const toggleTahun = (t) => {
-    const baru = tahun.includes(t)
-      ? tahun.filter((x) => x !== t)
-      : [...tahun, t].sort((a, b) => a - b)
-    onGanti({ ...nilai, tahun: baru })
+    const baru = draft.tahun.includes(t)
+      ? draft.tahun.filter((x) => x !== t)
+      : [...draft.tahun, t].sort((a, b) => a - b)
+    setDraft({ ...draft, tahun: baru })
+  }
+
+  const terapkan = () => {
+    onGanti(draft)
+    setBuka(false)
+  }
+
+  const reset = () => {
+    const baru = { bulan: [new Date().getMonth() + 1], tahun: [new Date().getFullYear()] }
+    setDraft(baru)
+    onGanti(baru)
+    setBuka(false)
   }
 
   const tahunMin = 2026
@@ -72,7 +93,7 @@ export default function PilihPeriode({ nilai, onGanti, className }) {
               <div className="grid grid-cols-3 gap-1.5">
                 {NAMA_BULAN.map((nama, i) => {
                   const num = i + 1
-                  const aktif = bulan.includes(num)
+                  const aktif = draft.bulan.includes(num)
                   return (
                     <button
                       key={nama}
@@ -96,7 +117,7 @@ export default function PilihPeriode({ nilai, onGanti, className }) {
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Tahun</p>
               <div className="grid grid-cols-3 gap-1.5">
                 {daftarTahun.map((y) => {
-                  const aktif = tahun.includes(y)
+                  const aktif = draft.tahun.includes(y)
                   return (
                     <button
                       key={y}
@@ -118,29 +139,29 @@ export default function PilihPeriode({ nilai, onGanti, className }) {
             {/* Aksi */}
             <div className="flex items-center justify-between pt-2 border-t border-slate-100">
               <button
-                onClick={() => onGanti({ bulan: [], tahun: [] })}
+                onClick={() => setDraft({ bulan: [], tahun: [] })}
                 className="text-xs text-slate-500 hover:text-slate-700"
               >
                 Semua
               </button>
-              <button
-                onClick={() => setBuka(false)}
-                className="btn-primary px-3 py-1.5 text-xs"
-              >
-                Tutup
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={reset}
+                  className="btn-secondary px-3 py-1.5 text-xs"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={terapkan}
+                  className="btn-primary px-3 py-1.5 text-xs"
+                >
+                  Terapkan
+                </button>
+              </div>
             </div>
           </div>
         )}
       </div>
-
-      <button
-        onClick={() => onGanti({ ...nilai, bulan: [new Date().getMonth() + 1], tahun: [new Date().getFullYear()] })}
-        className="btn-secondary px-3 py-2 text-xs"
-        title="Reset ke bulan ini"
-      >
-        Reset
-      </button>
 
       <span className="text-xs text-slate-500 whitespace-nowrap self-center">
         Periode: {labelPeriode}

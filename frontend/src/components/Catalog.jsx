@@ -12,48 +12,6 @@ const KELOMPOK = [
   { key: 'Repaint & Reglue', label: 'Repaint & Reglue', ikon: Footprints },
 ]
 
-// Data contoh hanya dipakai kalau backend tidak bisa dihubungi sama sekali.
-// Nilainya sudah mengikuti daftar harga asli supaya tampilan frontend tidak
-// jauh berbeda dari isi katalog yang sebenarnya.
-const CONTOH = [
-  {
-    id: 'c1',
-    kelompok: 'Cuci Sepatu',
-    jenis_treatment: 'Fast Cleaning',
-    merk: 'Fast Cleaning',
-    model: 'Paket Ringan',
-    harga_cuci: 15000,
-    harga_min: 15000,
-    harga_max: 15000,
-    keterangan_treatment: 'Upper, mid-sol, dan leces. Paket ringan.',
-    status: true,
-  },
-  {
-    id: 'c2',
-    kelompok: 'Cuci Sepatu',
-    jenis_treatment: 'Deep Cleaning',
-    merk: 'Deep Cleaning',
-    model: 'White',
-    harga_cuci: 30000,
-    harga_min: 30000,
-    harga_max: 30000,
-    keterangan_treatment: 'Upper, midsole, outsole, insole, dan leces.',
-    status: true,
-  },
-  {
-    id: 'c3',
-    kelompok: 'Repaint & Reglue',
-    jenis_treatment: 'Shoes Repaint',
-    merk: 'Shoes Repaint',
-    model: 'Upper Suede',
-    harga_cuci: 100000,
-    harga_min: 100000,
-    harga_max: 200000,
-    keterangan_treatment: 'Cat ulang bagian upper berbahan suede.',
-    status: true,
-  },
-]
-
 // Kelompok yang tidak ada di KELOMPOK (data lama tanpa kolom kelompok, atau
 // admin menambah kelompok sendiri di panel). Ditampilkan sebagai tab tambahan
 // supaya tidak hilang diam-diam.
@@ -70,7 +28,6 @@ export default function Catalog({ onSelectShoe }) {
   const [shoes, setShoes] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [contoh, setContoh] = useState(false)
   const [grupAktif, setGrupAktif] = useState(KELOMPOK[0].key)
 
   // Daftar tab dihitung setelah data masuk, karena kelompok tambahan dari
@@ -81,24 +38,16 @@ export default function Catalog({ onSelectShoe }) {
     const fetchShoes = async () => {
       try {
         setLoading(true)
+        setError(null)
         const response = await shoesApi.list({ aktif_only: true })
         const data = response.data
-        if (data.length > 0) {
-          setShoes(data)
-          setContoh(false)
-          const ada = kelompokTersedia(data)
-          const gabung = [...kelompokTersedia.map((k) => k.key), ...ada.filter((k) => !kelompokTersedia.some((x) => x.key === k))]
-          setGrupTersedia(gabung)
-        } else {
-          setShoes(CONTOH)
-          setContoh(true)
-          setGrupTersedia(KELOMPOK.map((k) => k.key))
-        }
+        setShoes(data)
+        const ada = kelompokTersedia(data)
+        const gabung = [...kelompokTersedia.map((k) => k.key), ...ada.filter((k) => !kelompokTersedia.some((x) => x.key === k))]
+        setGrupTersedia(gabung)
       } catch (err) {
         setError(err.message)
-        setShoes(CONTOH)
-        setContoh(true)
-        setGrupTersedia(KELOMPOK.map((k) => k.key))
+        setShoes([])
       } finally {
         setLoading(false)
       }
@@ -129,23 +78,17 @@ export default function Catalog({ onSelectShoe }) {
     )
   }
 
-  if (error && !contoh) {
+  if (error) {
     return (
       <div className="card p-8 text-center">
-        <p className="text-rose-600 mb-4">Gagal memuat data: {error}</p>
-        <p className="text-sm text-slate-500">Menampilkan data contoh...</p>
+        <p className="text-rose-600 mb-2">Gagal memuat data layanan</p>
+        <p className="text-sm text-slate-500">{error}</p>
       </div>
     )
   }
 
   return (
     <section aria-label="Katalog Layanan">
-      {contoh && (
-        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800 flex items-center gap-2">
-          <svg className="h-5 w-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
-          Menampilkan data contoh. Hubungkan ke backend untuk data real.
-        </div>
-      )}
 
       {/* Tab kelompok katalog */}
       <div className="mb-6 flex flex-wrap gap-2" role="tablist" aria-label="Kelompok layanan">
