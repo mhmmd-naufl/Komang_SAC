@@ -15,7 +15,7 @@ const KELOMPOK = [
 // Kelompok yang tidak ada di KELOMPOK (data lama tanpa kolom kelompok, atau
 // admin menambah kelompok sendiri di panel). Ditampilkan sebagai tab tambahan
 // supaya tidak hilang diam-diam.
-function kelompokTersedia(baris) {
+function getKelompokTersedia(baris) {
   const kunci = []
   for (const b of baris) {
     const k = (b.kelompok || '').trim()
@@ -42,8 +42,8 @@ export default function Catalog({ onSelectShoe }) {
         const response = await shoesApi.list({ aktif_only: true })
         const data = response.data
         setShoes(data)
-        const ada = kelompokTersedia(data)
-        const gabung = [...kelompokTersedia.map((k) => k.key), ...ada.filter((k) => !kelompokTersedia.some((x) => x.key === k))]
+        const ada = getKelompokTersedia(data)
+        const gabung = [...KELOMPOK.map((k) => k.key), ...ada.filter((k) => !KELOMPOK.some((x) => x.key === k))]
         setGrupTersedia(gabung)
       } catch (err) {
         setError(err.message)
