@@ -38,6 +38,7 @@ DUMMY_PHONES = {
     "628981000001", "628981000002", "628981000003", "628981000004", "628981000005",
 }
 ADMIN_PHONE = "628980570911"  # nomor asli — tidak dihapus oleh --reset
+ADMIN_NAME = "Achmad hasby dzatul akmam"
 
 
 # =============================================================
@@ -47,6 +48,7 @@ ADMIN_PHONE = "628980570911"  # nomor asli — tidak dihapus oleh --reset
 USERS = [
     # full_name,            phone,          role
     ("Admin Komang SAC",    ADMIN_PHONE,    "admin"),
+    ("Achmad hasby dzatul akmam", ADMIN_PHONE, "admin"),
     ("Agus Setiawan",       "628991000001", "technician"),
     ("Rizal Firmansyah",    "628991000002", "technician"),
     ("Bayu Nugroho",        "628991000003", "technician"),
@@ -84,14 +86,13 @@ STOCK = [
 DROP_POINTS = [
     (
         "Outlet Utama",
-        "Jl. Cisadane No.3, Lingkungan Mojoroto R, Singonegaran, "
-        "Kec. Banyuwangi, Kabupaten Banyuwangi, Jawa Timur 68415",
-        ADMIN_PHONE,
+        "Jl. Cisadane No.3, Lingkungan Mojoroto R, Singonegaran, Kec. Banyuwangi, Kabupaten Banyuwangi, Jawa Timur 68415",
+        "628980570911",
     ),
     (
-        "Dolay Cut",
-        "Jl. Kyai Haji Wahid Hasyim No. 76, Kabupaten Banyuwangi",
-        ADMIN_PHONE,
+        "Dolaycut",
+        "Jl. Kyai Haji Wahid Hasyim No. 76, Kabupaten Banyuwangi, Jawa Timur 68461, Indonesia",
+        "6289680841298",
     ),
 ]
 
