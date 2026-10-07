@@ -123,13 +123,16 @@ export default function AdminDashboard() {
       else setLoading(true);
       setError(null);
       try {
-        // Sekarang param sudah berisi { bulan, tahun } langsung (array)
-        const p = { bulan: param.bulan, tahun: param.tahun };
+        // Backend expect single integer untuk bulan/tahun, bukan array.
+        // Kalau multi-select, kirim periode=semua (tanpa filter bulan/tahun).
+        const p = (param.bulan?.length === 1 && param.tahun?.length === 1)
+          ? { bulan: param.bulan[0], tahun: param.tahun[0] }
+          : { periode: 'semua' };
 
         // Core dashboard diambil dari endpoint gabungan supaya satu refresh
         // hanya butuh satu panggilan untuk angka, grafik, dan stok kritis.
         const [dashboard, trx, stock] = await Promise.all([
-          statsApi.dashboard(p),
+          statsApi.admin(p),
           transactionsApi.list({ limit: 8 }),
           stockApi.list({ low_stock: true }),
         ]);
