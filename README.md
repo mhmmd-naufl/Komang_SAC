@@ -28,6 +28,7 @@ manage_users.py       Lihat daftar akun + reset password
 check_schema.py       Cek apakah kolom database sudah lengkap
 check_auth.py         Audit: endpoint mana yang belum diproteksi auth
 seed_dummy.py         Isi data dummy (konsumen, teknisi, transaksi, stock)
+seed_pricelist.py     Isi 27 layanan asli Komang SAC (idempoten)
 test_api.py           Uji endpoint + RBAC (in-process, tanpa server)
 schema.sql            DDL untuk instalasi database BARU
 migrate.sql           Untuk database yang sudah ada (aman diulang)
@@ -41,6 +42,7 @@ frontend/             React + Vite + Tailwind
                      Pagination, AdminUi, Toast
   src/components/admin/
                      AdminShoes, AdminTransaksi, AdminStock, AdminUsers,
+                     AdminExpenses (pengeluaran operasional + rekap mingguan),
                       PilihPeriode (pemilih bulan/tahun), Grafik (batang + horizontal)
   src/contexts/      AuthContext
   src/hooks/         useTabel.js (paginasi + filter + debounce pencarian)
@@ -56,7 +58,7 @@ design.md             Sistem desain UI
 summary.md            Ringkasan untuk partner
 data.md               Format intake data master dari Google Form
 
-content-planner/      Proyek TERPISAH (content planner media sosial) — akan dipindahkan
+Rentalyzer/           Proyek TERPISAH (sistem rental, repo git sendiri) — bukan bagian Komang SAC
 ```
 
 ---
@@ -122,6 +124,10 @@ SUPABASE_SERVICE_ROLE_KEY=...   # WAJIB — bukan anon key
 JWT_SECRET_KEY=<string acak>
 ```
 
+Opsional: `OPENROUTER_API_KEY` + `OPENROUTER_MODELS` untuk ringkasan AI
+(diatur di bagian [Ringkasan AI](#ringkasan-ai-openrouter)). Tanpa keduanya
+dashboard tetap jalan dengan ringkasan berbasis aturan.
+
 > **Kenapa wajib `service_role`?** RLS di proyek ini sudah aktif di semua tabel.
 > Effectnya kalau backend pakai anon key: `SELECT` tidak error tapi **balikin 0 baris**
 > diam-diam (data selalu terlihat kosong), sedangkan `INSERT`/`UPDATE` **ditolak**.
@@ -159,7 +165,7 @@ Membuat 1 admin, 3 teknisi, 1 drop point, 5 konsumen, 8 master layanan + harga,
 7 item stock, dan 11 transaksi yang tersebar di 5 status — supaya dashboard,
 filter, dan halaman tracking langsung kelihatan terisi.
 
-### 4c. Isi daftar harga asli (WAJIK sebelum dipakai)
+### 4c. Isi daftar harga asli (WAJIB sebelum dipakai)
 
 ```bash
 python seed_pricelist.py --dry-run   # lihat dulu, tidak menulis apa pun
@@ -261,6 +267,7 @@ Script yang tersedia:
 | Method       | Path                             | Auth          | Keterangan                                                     |
 | ------------ | -------------------------------- | ------------- | -------------------------------------------------------------- |
 | GET          | `/health`                        | —             | Cek koneksi database                                           |
+| GET          | `/api/config`                    | —             | Info bisnis + metode bayar yang diterima (`ACCEPTED_PAYMENTS`) |
 | POST         | `/api/auth/register`             | —             | Daftar sebagai pelanggan                                       |
 | POST         | `/api/auth/login`                | —             | Login, dapat token JWT                                         |
 | GET          | `/api/auth/me`                   | JWT           | Profil user aktif                                              |
@@ -269,8 +276,9 @@ Script yang tersedia:
 | GET          | `/api/sepatu/{id}`               | —             | Detail satu layanan                                            |
 | GET          | `/api/drop-points`               | —             | Lokasi mitra publik                                             |
 | GET          | `/api/drop-points/{id}`          | —             | Detail satu mitra                                              |
-| GET          | `/api/transaksi/tracking/{kode}` | —             | Cek status publik (`KS-XXXXXX`)                                |
-| POST         | `/api/transaksi`                 | JWT           | Buat booking. Konsumen = atas namanya sendiri                  |
+| GET          | `/api/transaksi/tracking/{kode}` | —             | Cek status publik (`KS-XXXXXX`). Ikut `grup_id`, estimasi, dan foto |
+| GET          | `/api/transaksi/grup/{grup_id}`  | —             | Semua pasang dalam booking multi-pasang (kode+status+layanan)  |
+| POST         | `/api/transaksi`                 | JWT           | Buat booking. Konsumen = atas namanya sendiri. `payment_method` divalidasi terhadap `ACCEPTED_PAYMENTS` |
 | GET          | `/api/transaksi`                 | JWT           | Konsumen: miliknya. Teknisi: tugasnya. Admin/mitra: semua. `dari_selesai`/`sampai_selesai` untuk laporan (berbeda dari `dari`/`sampai` yang memakai tanggal masuk)      |
 | GET          | `/api/transaksi/{id}`            | JWT           | Hanya pemilik/teknisi/admin                                    |
 | PUT          | `/api/transaksi/{id}/status`     | teknisi/admin  | Update status. Wajib `photo_after` untuk Selesai/Siap diambil. Backend mencatat `selesai_at` saat status jadi Selesai   |
@@ -283,6 +291,9 @@ Script yang tersedia:
 | GET          | `/api/stock/{id}`                | admin/teknisi | Detail item stok                                               |
 | POST/PUT     | `/api/stock`                     | admin         | Tambah/ubah stok                                               |
 | POST         | `/api/stock/{id}/kurangi`        | admin/teknisi | Kurangi stok saat pakai bahan                                  |
+| GET/POST     | `/api/expenses`                  | admin         | Riwayat + catat pengeluaran. Filter `kategori`, `dari`/`sampai` (inklusif), `q` di keterangan |
+| PUT/DELETE   | `/api/expenses/{id}`             | admin         | Koreksi / hapus catatan pengeluaran                            |
+| GET          | `/api/expenses/rekap-mingguan`   | admin         | Total per minggu (Senin–Minggu WIB), 8 minggu terakhir          |
 | GET          | `/api/users?role=technician`     | admin         | Daftar user per role                                           |
 | GET/PUT      | `/api/users/{id}`                | admin         | Detail/ubah user                                               |
 | POST         | `/api/users`                     | admin         | Buat user                                                      |
@@ -425,6 +436,42 @@ berikutnya), karena backend membandingkannya dengan `lt()`. Kalau mengirim
 tanggal terakhir periode, transaksi yang selesai tepat tengah malam tanggal 1
 akan hilang dari laporan.
 
+### Pengeluaran operasional & sisa bersih
+
+Halaman **Pengeluaran** (`/admin/pengeluaran`) mencatat biaya di luar bahan
+cuci: token listrik, PDAM, dan kategori lain yang bisa diketik bebas (otomatis
+dinormalisasi lowercase, jadi "Listrik" dan "listrik" tidak jadi dua kategori).
+
+Bagian atas halaman menampilkan **rekap mingguan** — total minggu ini (Senin–
+Minggu, WIB) dibanding minggu lalu, plus grafik mini 8 minggu terakhir. Ini
+jawaban cepat untuk "minggu ini habis berapa".
+
+Pengeluaran ikut masuk hitungan dashboard dan CSV ringkasan:
+
+```
+Sisa bersih = omzet − komisi teknisi − pengeluaran
+```
+
+`Sisa untuk outlet` (omzet − komisi) tetap dilaporkan terpisah, jadi dua-duanya
+bisa dibandingkan. Ringkasan AI membaca total per kategori saja — kolom
+`keterangan` tidak pernah dikirim ke OpenRouter karena bisa memuat catatan
+pribadi.
+
+### Estimasi per layanan & booking multi-pasang
+
+Dua kolom tambahan di sisi konsumen:
+
+- **`shoes.estimasi_hari`** — estimasi pengerjaan per layanan (diatur dari
+  panel admin; kosong = default 3 hari). Konsumen melihat tanggal estimasi
+  yang sesuai layanannya ("Repaint ±6 hari", bukan "2–3 hari" untuk semua),
+  dan halaman status menampilkan ajakan bertanya via WA yang halus kalau
+  pengerjaan lewat dari estimasi.
+- **`transactions.grup_id`** — "benang" booking multi-pasang. Konsumen bisa
+  menambah beberapa pasang dalam satu form booking; tiap pasang tetap jadi
+  transaksi sendiri (status memang per pasang) dengan `grup_id` yang sama.
+  Halaman status menampilkan "Satu booking, N pasang" dengan status tiap
+  pasang, dan halaman akun menandainya dengan chip *booking grup*.
+
 ### Parameter periode di stats & analytics
 
 `/api/stats/admin` dan `/api/analytics/summary` menerima parameter yang sama:
@@ -481,17 +528,37 @@ Dua jalur, dan UI selalu memberi tahu yang mana yang dipakai:
 
 | `sumber` | Kapan dipakai | Hasil |
 |---|---|---|
-| `ai` | `OPENROUTER_API_KEY` ada dan panggilan berhasil | Naratif seperti tulisan analis |
-| `fallback` | Key kosong, model habis kuota (429), timeout, atau model dihapus dari katalog | Ringkasan deterministik dari `analytics.py`, tanpa jaringan |
+| `ai` | `OPENROUTER_API_KEY` ada dan salah satu model berhasil | Naratif seperti tulisan analis |
+| `fallback` | Key kosong, atau **semua** model gagal (429/timeout/dihapus dari katalog) | Ringkasan deterministik dari `analytics.py`, tanpa jaringan |
 | `error` | Backend gagal menghitung (mis. kolom berubah) | Panel angka tetap tampil, naratif diganti pesan error |
 
 Jadi halaman dashboard **tidak pernah kosong** hanya karena layanan AI sedang
 tidak sehat. Fallback butuh nol konfigurasi.
 
 Aktifkan dengan isi `OPENROUTER_API_KEY` di `.env` (gratis, ambil di
-<https://openrouter.ai/keys>). Model default `nvidia/nemotron-3-super-120b-a12b:free`
-— kalau habis kuota, ganti ke model lain dari daftar
-<https://openrouter.ai/models?q=:free>.
+<https://openrouter.ai/keys>).
+
+### Fallback multi-model
+
+Model gratis sering kena rate limit (429) atau tiba-tiba hilang dari katalog.
+Karena itu backend tidak bergantung pada satu model: `OPENROUTER_MODELS` di
+`.env` berisi daftar model yang **dicoba berurutan** sampai ada yang berhasil:
+
+```ini
+OPENROUTER_MODELS=nvidia/nemotron-3-super-120b-a12b:free,nvidia/nemotron-3.5-lightning:free,nvidia/nemotron-3-ultra-550b-a55b:free,google/gemma-4-31b-it:free,google/gemma-4-26b-a4b-it:free
+```
+
+- Model paling kiri adalah prioritas utama; sisanya cadangan.
+- Kalau `OPENROUTER_MODELS` kosong, `OPENROUTER_MODEL` (satu model) yang
+  dipakai — kompatibel dengan `.env` lama tanpa perlu diubah.
+- Total waktu tunggu dijaga ±45 detik: jatah timeout tiap model dibagi rata
+  (minimal 12 detik), jadi makin banyak cadangan tidak berarti makin lama
+  menunggu. Kegagalan cepat seperti 429/404 langsung lanjut ke model berikutnya.
+- Field `model` di respons menunjukkan model yang benar-benar menjawab, jadi
+  kelihatan di UI saat sedang memakai cadangan.
+
+Daftar model gratis terkini: <https://openrouter.ai/models?q=:free>.
+Catatan hasil uji tiap model ada di komentar atas `analytics.py`.
 
 Yang dikirim ke OpenRouter **hanya angka agregat**: jumlah transaksi, omzet,
 status, nama layanan, sisa stok. Kode transaksi, nomor telepon, dan nama orang
@@ -557,4 +624,4 @@ menulis apa pun.
 
 ---
 
-_Folder `content-planner/` adalah proyek terpisah dan akan dipindahkan keluar dari repo ini._
+_Folder `Rentalyzer/` adalah proyek terpisah (sistem rental) dengan repo git-nya sendiri — bukan bagian dari Komang SAC dan tidak ikut ter-commit di sini._

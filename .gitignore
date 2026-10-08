@@ -31,6 +31,7 @@ Thumbs.db
 *.log
 
 # --- Proyek TERPISAH ---
-# Content planner media sosial. Bukan bagian Komang SAC, tidak ikut
-# ter-commit. Folder tetap ada di disk -- hanya diabaikan oleh git.
-content-planner/
+# Rentalyzer (sistem rental). Bukan bagian Komang SAC, punya repo git
+# sendiri, tidak ikut ter-commit. Folder tetap ada di disk -- hanya
+# diabaikan oleh git.
+Rentalyzer/
