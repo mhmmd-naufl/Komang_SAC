@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { LogOut, Footprints } from 'lucide-react'
+import { LogOut } from 'lucide-react'
+import Logo from './Logo'
 import { useAuth } from '../contexts/AuthContext'
 import LogoutConfirm from './LogoutConfirm'
 import { cn, getRoleLabel, getRoleColor } from '../utils/helpers'
@@ -43,9 +44,7 @@ export default function Navbar() {
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2" aria-label="Komang SAC beranda">
-            <div className="h-8 w-8 rounded-xl bg-primary-600 flex items-center justify-center shrink-0">
-              <Footprints className="h-5 w-5 text-white" />
-            </div>
+            <Logo className="h-8 w-8" />
             <span className="font-bold text-xl text-slate-900">Komang SAC</span>
           </Link>
 

@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
-import { Search, Package, Loader2, MapPin, Phone, Calendar, PackageCheck, Info } from 'lucide-react'
-import { transactionsApi } from '../services/api'
+import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Search, Package, Loader2, MapPin, Phone, Calendar, PackageCheck, Camera } from 'lucide-react'
+import { transactionsApi, configApi } from '../services/api'
 import { getStatusConfig, formatRupiah, formatDateTime } from '../utils/helpers'
 import { cn } from '../utils/helpers'
 
@@ -14,82 +15,104 @@ const FLOW_META = {
   'Siap diambil': { icon: MapPin, desc: 'Silakan ambil di drop point' },
 }
 
-// Mock untuk preview sampai backend & data transaksi tersedia
-const mockTransactions = [
-  {
-    id: 'KS-2401A',
-    status: 'Diproses',
-    created_at: '2026-10-04T09:12:00Z',
-    shoes: { merk: 'Deep Cleaning', model: 'White', jenis_treatment: 'Deep Cleaning' },
-    harga: 30000,
-    drop_point: { nama: 'Outlet Utama', alamat: 'Jl. Cisadane No.3, Banyuwangi' },
-    catatan_konsumen: 'Tolong jaga warna putih tetap bersih.',
-  },
-  {
-    id: 'KS-2401B',
-    status: 'Siap diambil',
-    created_at: '2026-10-01T14:40:00Z',
-    shoes: { merk: 'Shoes Repaint', model: 'Upper Suede', jenis_treatment: 'Shoes Repaint' },
-    harga: 100000,
-    drop_point: { nama: 'Dolay Cut', alamat: 'Jl. Kyai Haji Wahid Hasyim No.76' },
-    catatan_konsumen: null,
-  },
+const LABEL_BAYAR = {
+  tunai: 'Tunai di tempat',
+  transfer: 'Transfer Bank',
+  qris: 'QRIS / E-Wallet',
+}
+
+const WA_DEFAULT = '628980570911'
+
+const FOTO_META = [
+  { kunci: 'photo_before', label: 'Sebelum dicuci' },
+  { kunci: 'photo_after', label: 'Sesudah dicuci' },
+  { kunci: 'photo_defect', label: 'Catatan kondisi' },
 ]
 
 export default function StatusTracker() {
-  const [code, setCode] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [code, setCode] = useState(searchParams.get('kode') || '')
   const [result, setResult] = useState(null)
+  const [grup, setGrup] = useState(null)
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState(null)
   const [notFound, setNotFound] = useState(false)
-
-  // Codes Hardcoded demo — hapus setelah backend siap
-  const demoCodes = mockTransactions.map((t) => t.id)
+  const [config, setConfig] = useState(null)
 
   useEffect(() => {
     document.title = 'Cek Status — Komang SAC'
+    configApi.get().then(({ data }) => setConfig(data)).catch(() => {})
   }, [])
 
-  const handleSearch = async (e) => {
-    e.preventDefault()
-    const trimmed = code.trim().toUpperCase()
+  const cari = useCallback(async (nomor) => {
+    const trimmed = nomor.trim().toUpperCase()
     if (!trimmed) return
 
     setSearching(true)
     setError(null)
     setNotFound(false)
     setResult(null)
+    setGrup(null)
 
     try {
       const { data } = await transactionsApi.tracking(trimmed)
       setResult(data)
+      // Booking multi-pasang: ambil pasangan lain supaya konsumen tidak
+      // mengetik kode satu per satu. Gagal memuat grup bukan alasan
+      // menyembunyikan status utamanya.
+      if (data?.grup_id) {
+        transactionsApi
+          .grup(data.grup_id)
+          .then((res) => setGrup(Array.isArray(res.data) ? res.data : null))
+          .catch(() => setGrup(null))
+      }
     } catch (err) {
       const status = err?.response?.status
       if (status === 404) {
-        // Fallback ke mock supaya UI tetap bisa direview
-        const mock = mockTransactions.find((t) => t.id === trimmed)
-        if (mock) {
-          setResult({ ...mock, _mock: true })
-        } else {
-          setNotFound(true)
-        }
-      } else if (err.code === 'ERR_NETWORK' || !status) {
-        // Backend mati — pakai mock untuk demo
-        const mock = mockTransactions.find((t) => t.id === trimmed)
-        if (mock) {
-          setResult({ ...mock, _mock: true })
-        } else {
-          setError('Backend tidak dapat dihubungi. Coba lagi nanti.')
-        }
+        setNotFound(true)
       } else {
-        setError(err?.friendlyMessage || 'Gagal mencari transaksi.')
+        setError(err?.friendlyMessage || 'Gagal mencari transaksi. Coba lagi.')
       }
     } finally {
       setSearching(false)
     }
+  }, [])
+
+  // Link /status?kode=KS-XXXXXX (dari halaman akun atau setelah booking)
+  // langsung mengisi form dan mencari -- konsumen tidak mengetik ulang kodenya.
+  useEffect(() => {
+    const dariUrl = searchParams.get('kode')
+    if (dariUrl) {
+      setCode(dariUrl)
+      cari(dariUrl)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleSearch = (e) => {
+    e.preventDefault()
+    setSearchParams(code.trim() ? { kode: code.trim().toUpperCase() } : {})
+    cari(code)
   }
 
   const currentStep = result ? FLOW.indexOf(result.status) : -1
+  const waAdmin = config?.business_phone || WA_DEFAULT
+  const jamBuka = config?.business_hours
+  const fotoAda = result ? FOTO_META.filter((f) => result[f.kunci]) : []
+
+  // Estimasi per layanan (kolom estimasi_hari di master shoes; default 3).
+  // Dipakai untuk tanggal estimasi dan penanda keterlambatan yang halus.
+  const STATUS_FINAL = ['Selesai', 'Siap diambil']
+  const estimasiHari = result?.shoes?.estimasi_hari || 3
+  const tanggalEstimasi = result?.created_at
+    ? new Date(new Date(result.created_at).getTime() + estimasiHari * 86400000)
+    : null
+  const terlambat = Boolean(
+    result &&
+    !STATUS_FINAL.includes(result.status) &&
+    tanggalEstimasi &&
+    Date.now() > tanggalEstimasi.getTime()
+  )
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -104,7 +127,7 @@ export default function StatusTracker() {
               value={code}
               onChange={(e) => { setCode(e.target.value); setNotFound(false); setError(null) }}
               className="input pl-9 font-mono uppercase"
-              placeholder="KS-2401A"
+              placeholder="KS-ABC123"
             />
           </div>
           <button type="submit" disabled={searching || !code.trim()} className="btn-primary sm:px-8">
@@ -112,12 +135,8 @@ export default function StatusTracker() {
           </button>
         </div>
         <p className="text-xs text-slate-500 mt-3">
-          Nomor booking diberikan admin saat titip sepatu. Demo:{' '}
-          {demoCodes.map((c) => (
-            <button key={c} type="button" onClick={() => setCode(c)} className="font-mono text-primary-600 hover:underline mr-2">
-              {c}
-            </button>
-          ))}
+          Nomor booking diberikan saat kamu menitipkan sepatu. Sudah login? Semua
+          nomor booking-mu ada di <a href="/akun" className="text-primary-600 font-medium hover:underline">halaman akun</a>.
         </p>
       </form>
 
@@ -134,13 +153,6 @@ export default function StatusTracker() {
       {/* Result */}
       {result && (
         <div className="mt-6 space-y-5 animate-slide-up">
-          {result._mock && (
-            <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800">
-              <Info className="h-4 w-4 flex-shrink-0" />
-              Data contoh — backend belum terhubung.
-            </div>
-          )}
-
           {/* Header */}
           <div className="card overflow-hidden">
             <div className="px-5 py-4 bg-primary-600 text-white flex items-center justify-between">
@@ -161,6 +173,11 @@ export default function StatusTracker() {
               <div>
                 <p className="text-slate-500 text-xs">Biaya</p>
                 <p className="font-medium text-primary-700">{formatRupiah(result.harga)}</p>
+                {result.payment_method && (
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    via {LABEL_BAYAR[result.payment_method] || result.payment_method}
+                  </p>
+                )}
               </div>
               <div>
                 <p className="text-slate-500 text-xs">Masuk</p>
@@ -184,8 +201,69 @@ export default function StatusTracker() {
                   <MapPin className="h-3.5 w-3.5 text-slate-400" /> {result.drop_point?.nama}
                 </p>
               </div>
+              <div>
+                <p className="text-slate-500 text-xs">Estimasi Selesai</p>
+                <p className="font-medium flex items-center gap-1.5">
+                  <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                  {STATUS_FINAL.includes(result.status)
+                    ? 'Sudah rampung'
+                    : `${formatDateTime(tanggalEstimasi)} (±${estimasiHari} hari)`}
+                </p>
+              </div>
             </div>
           </div>
+
+          {/* Pasangan lain dalam booking yang sama */}
+          {grup && grup.length > 1 && (
+            <div className="card p-5">
+              <h3 className="font-semibold text-slate-900 mb-3">
+                Satu booking, {grup.length} pasang
+              </h3>
+              <div className="space-y-2">
+                {grup.map((g) => (
+                  <button
+                    key={g.kode}
+                    type="button"
+                    onClick={() => { setCode(g.kode); setSearchParams({ kode: g.kode }); cari(g.kode) }}
+                    className={cn(
+                      'w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border text-left transition-colors',
+                      g.kode === result.kode
+                        ? 'border-primary-300 bg-primary-50'
+                        : 'border-slate-200 hover:bg-slate-50'
+                    )}
+                  >
+                    <span className="min-w-0">
+                      <span className="font-mono text-xs font-semibold text-slate-900">{g.kode}</span>
+                      <span className="block text-xs text-slate-500 truncate">
+                        {g.shoes?.merk} {g.shoes?.model}
+                      </span>
+                    </span>
+                    <span className={cn('badge shrink-0', getStatusConfig(g.status).className)}>
+                      {getStatusConfig(g.status).label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Penanda keterlambatan yang halus: momen paling rawan komplain
+              diubah jadi ajakan bertanya, bukan kejutan buruk. */}
+          {terlambat && (
+            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800">
+              Pengerjaanmu butuh waktu ekstra dari estimasi (±{estimasiHari} hari).{' '}
+              <a
+                href={`https://wa.me/${waAdmin}?text=${encodeURIComponent(
+                  `Halo Komang SAC, saya mau tanya progres sepatu saya yang nomor ${result.kode}.`
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold underline"
+              >
+                Tanya progres via WhatsApp
+              </a>
+            </div>
+          )}
 
           {/* Progress */}
           <div className="card p-5 sm:p-6">
@@ -236,6 +314,36 @@ export default function StatusTracker() {
             </div>
           </div>
 
+          {/* Foto before/after -- bukti kerja teknisi, nilai kepercayaan
+              terbesar buat konsumen. URL-nya publik dari Supabase Storage,
+              jadi tinggal dirender. */}
+          {fotoAda.length > 0 && (
+            <div className="card p-5">
+              <h3 className="font-semibold text-slate-900 mb-3 flex items-center gap-2">
+                <Camera className="h-4 w-4 text-primary-600" /> Dokumentasi Sepatumu
+              </h3>
+              <div className={cn('grid gap-3', fotoAda.length > 1 ? 'grid-cols-2' : 'grid-cols-1')}>
+                {fotoAda.map((f) => (
+                  <a
+                    key={f.kunci}
+                    href={result[f.kunci]}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="group block"
+                  >
+                    <img
+                      src={result[f.kunci]}
+                      alt={f.label}
+                      loading="lazy"
+                      className="w-full aspect-square object-cover rounded-xl border border-slate-200 group-hover:opacity-90 transition-opacity"
+                    />
+                    <p className="text-xs text-slate-500 mt-1.5">{f.label}</p>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Catatan */}
           {result.catatan_konsumen && (
             <div className="card p-5">
@@ -250,11 +358,14 @@ export default function StatusTracker() {
           {result.status === 'Siap diambil' && (
             <div className="card-primary p-6 text-center">
               <h3 className="font-bold text-slate-900 mb-1">Sepatu kamu sudah siap!</h3>
-              <p className="text-sm text-slate-600 mb-4">
+              <p className="text-sm text-slate-600 mb-1">
                 Ambil di <strong>{result.drop_point?.nama}</strong>
               </p>
+              {jamBuka && (
+                <p className="text-xs text-slate-500 mb-4">Jam operasional: {jamBuka}</p>
+              )}
               <a
-                href={`https://wa.me/628980570911?text=${encodeURIComponent(
+                href={`https://wa.me/${waAdmin}?text=${encodeURIComponent(
                   `Halo Komang SAC, saya mau ambil sepatu booking ${result.kode}`
                 )}`}
                 target="_blank"

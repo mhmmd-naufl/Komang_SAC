@@ -41,6 +41,7 @@ const FORM_AWAL = {
   harga_max: "",
   jenis_treatment: "",
   keterangan_treatment: "",
+  estimasi_hari: "",
   status: true,
 };
 
@@ -74,6 +75,8 @@ function kePayload(form, { hanyaStatus = false } = {}) {
     harga_max: pakaiRentang ? hargaAtas : null,
     jenis_treatment: isi(form.jenis_treatment?.trim()) ?? null,
     keterangan_treatment: isi(form.keterangan_treatment?.trim()) ?? null,
+    // Kosong = pakai default di sisi konsumen (bukan 0 -- 0 bukan estimasi sah).
+    estimasi_hari: form.estimasi_hari === "" ? null : Number(form.estimasi_hari),
     status: form.status,
   };
 }
@@ -94,6 +97,7 @@ function formDariBaris(baris) {
     harga_max: rentang ? String(atas) : "",
     jenis_treatment: baris.jenis_treatment ?? "",
     keterangan_treatment: baris.keterangan_treatment ?? "",
+    estimasi_hari: baris.estimasi_hari != null ? String(baris.estimasi_hari) : "",
     status: Boolean(baris.status),
   };
 }
@@ -162,6 +166,12 @@ export default function AdminShoes() {
         e.harga_max = "Harga atas wajib diisi";
       else if (atas < harga)
         e.harga_max = "Harga atas harus lebih besar dari harga bawah";
+    }
+
+    if (form.estimasi_hari !== "") {
+      const est = Number(form.estimasi_hari);
+      if (!Number.isInteger(est) || est < 1 || est > 60)
+        e.estimasi_hari = "Estimasi 1-60 hari, atau kosongkan";
     }
     return e;
   };
@@ -487,6 +497,22 @@ export default function AdminShoes() {
                 </Field>
               )}
             </div>
+
+            <Field
+              label="Estimasi Pengerjaan (hari)"
+              hint="Ditampilkan ke konsumen sebagai tanggal estimasi selesai. Kosongkan untuk memakai default (3 hari). Repaint/Reglue biasanya lebih lama."
+              error={errors.estimasi_hari}
+            >
+              <input
+                type="number"
+                min="1"
+                max="60"
+                value={form.estimasi_hari}
+                onChange={(e) => ubahField("estimasi_hari", e.target.value)}
+                className={cn("input", errors.estimasi_hari && "input-error")}
+                placeholder="3"
+              />
+            </Field>
 
             <Field
               label="Keterangan"

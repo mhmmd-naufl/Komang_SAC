@@ -1,13 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, Outlet, Link, useLocation } from 'react-router-dom'
-import { Menu, LogOut, LayoutDashboard, Footprints, Truck, Settings, Users } from 'lucide-react'
+import { Menu, LogOut, LayoutDashboard, Footprints, Truck, Settings, Users, Receipt } from 'lucide-react'
 import Navbar from './components/Navbar'
 import Catalog from './components/Catalog'
-import BookingModal from './components/BookingModal'
+import BookingModal, { KUNCI_PENDING_BOOKING } from './components/BookingModal'
 import AdminDashboard from './components/AdminDashboard'
 import LoginModal from './components/LoginModal'
 import StatusTracker from './components/StatusTracker'
 import LogoutConfirm from './components/LogoutConfirm'
+import Logo from './components/Logo'
 import TeknisiPage from './components/TeknisiPage'
 import DropPointPage from './components/DropPointPage'
 import CustomerAccount from './components/CustomerAccount'
@@ -15,6 +16,7 @@ import AdminShoes from './components/admin/AdminShoes'
 import AdminTransaksi from './components/admin/AdminTransaksi'
 import AdminStock from './components/admin/AdminStock'
 import AdminUsers from './components/admin/AdminUsers'
+import AdminExpenses from './components/admin/AdminExpenses'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { Toaster } from './components/Toast'
 import { cn } from './utils/helpers'
@@ -65,12 +67,31 @@ const DROP_POINTS = [
 
 function HomePage() {
   const [showBooking, setShowBooking] = useState(false)
-  const [selectedShoe, setSelectedShoe] = useState(null)
+  const [selectedItems, setSelectedItems] = useState([])
 
   const openBooking = (shoe = null) => {
-    setSelectedShoe(shoe)
+    setSelectedItems(shoe ? [shoe] : [])
     setShowBooking(true)
   }
+
+  // Lanjutkan booking yang tertunda karena konsumen dialihkan ke halaman
+  // login (BookingModal menulis daftar layanan pilihan ke sessionStorage).
+  // Tanpa ini, konsumen yang baru login harus memilih ulang dari katalog.
+  useEffect(() => {
+    const mentah = sessionStorage.getItem(KUNCI_PENDING_BOOKING)
+    if (!mentah) return
+    sessionStorage.removeItem(KUNCI_PENDING_BOOKING)
+    try {
+      const items = JSON.parse(mentah)
+      if (Array.isArray(items) && items.length && items[0]?.id) {
+        setSelectedItems(items)
+        setShowBooking(true)
+      }
+    } catch {
+      // JSON rusak di sessionStorage bukan alasan mengganggu beranda.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <PublicLayout>
@@ -178,7 +199,7 @@ function HomePage() {
 
       {showBooking && (
         <BookingModal
-          shoe={selectedShoe}
+          items={selectedItems}
           onClose={() => setShowBooking(false)}
           onSuccess={() => setShowBooking(false)}
         />
@@ -248,6 +269,7 @@ function AdminLayout() {
     { path: '/admin/sepatu', label: 'Kelola Sepatu', icon: Footprints },
     { path: '/admin/transaksi', label: 'Transaksi', icon: Truck },
     { path: '/admin/stock', label: 'Stok & Bahan', icon: Settings },
+    { path: '/admin/pengeluaran', label: 'Pengeluaran', icon: Receipt },
     { path: '/admin/users', label: 'Pengguna', icon: Users },
   ]
 
@@ -359,9 +381,7 @@ function RoleLayout() {
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="container-main flex items-center gap-4 h-16">
           <Link to="/" className="flex items-center gap-2 shrink-0">
-            <span className="h-8 w-8 rounded-lg bg-primary-600 flex items-center justify-center">
-              <Footprints className="h-4 w-4 text-white" />
-            </span>
+            <Logo className="h-8 w-8" fallbackClassName="bg-primary-600 rounded-lg" />
             <span className="hidden sm:block font-bold text-primary-700">Komang SAC</span>
           </Link>
 
@@ -431,6 +451,7 @@ function AppRoutes() {
         <Route path="sepatu" element={<AdminShoes />} />
         <Route path="transaksi" element={<AdminTransaksi />} />
         <Route path="stock" element={<AdminStock />} />
+        <Route path="pengeluaran" element={<AdminExpenses />} />
         <Route path="users" element={<AdminUsers />} />
       </Route>
 

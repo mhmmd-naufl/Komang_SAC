@@ -11,7 +11,7 @@ import {
   Clock,
   ChevronRight,
 } from 'lucide-react'
-import { transactionsApi, shoesApi } from '../services/api'
+import { transactionsApi, shoesApi, configApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { getStatusConfig, formatRupiah, formatDateTime, cn } from '../utils/helpers'
 import { SearchInput } from './AdminUi'
@@ -34,6 +34,7 @@ export default function CustomerAccount() {
   const { user } = useAuth()
   const [transaksi, setTransaksi] = useState([])
   const [katalog, setKatalog] = useState({})
+  const [jamBuka, setJamBuka] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [cari, setCari] = useState('')
@@ -53,6 +54,13 @@ export default function CustomerAccount() {
     } finally {
       setLoading(false)
     }
+  }, [])
+
+  useEffect(() => {
+    configApi
+      .get()
+      .then(({ data }) => setJamBuka(data?.business_hours || null))
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -182,6 +190,35 @@ export default function CustomerAccount() {
               })}
             </ol>
 
+            {/* Foto dokumentasi teknisi untuk sepatu yang sedang jalan.
+                Konsumen paling sering menanyakan ini -- tampilkan begitu ada. */}
+            {(aktif.photo_before || aktif.photo_after) && (
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                {aktif.photo_before && (
+                  <a href={aktif.photo_before} target="_blank" rel="noopener noreferrer" className="group">
+                    <img
+                      src={aktif.photo_before}
+                      alt="Kondisi sebelum dicuci"
+                      loading="lazy"
+                      className="w-full aspect-square object-cover rounded-xl border border-slate-200 group-hover:opacity-90 transition-opacity"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Sebelum dicuci</p>
+                  </a>
+                )}
+                {aktif.photo_after && (
+                  <a href={aktif.photo_after} target="_blank" rel="noopener noreferrer" className="group">
+                    <img
+                      src={aktif.photo_after}
+                      alt="Kondisi sesudah dicuci"
+                      loading="lazy"
+                      className="w-full aspect-square object-cover rounded-xl border border-slate-200 group-hover:opacity-90 transition-opacity"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Sesudah dicuci</p>
+                  </a>
+                )}
+              </div>
+            )}
+
             {aktif.catatan_konsumen && (
               <p className="mt-5 text-xs text-slate-500 flex items-start gap-1.5">
                 <MessageCircle className="h-3.5 w-3.5 flex-shrink-0 mt-px" />
@@ -192,7 +229,7 @@ export default function CustomerAccount() {
             {aktif.status === 'Siap diambil' && (
               <p className="mt-3 text-xs font-medium text-cyan-700 flex items-center gap-1.5">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                Sudah siap diambil di outlet. Datang sesuai jam buka ya.
+                Sudah siap diambil di outlet.{jamBuka ? ` Jam operasional: ${jamBuka}.` : ' Datang sesuai jam buka ya.'}
               </p>
             )}
           </div>
@@ -264,6 +301,9 @@ export default function CustomerAccount() {
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono text-sm font-semibold text-slate-900">{t.kode}</span>
                         <span className={cfg.className}>{cfg.label}</span>
+                        {t.grup_id && (
+                          <span className="badge bg-slate-100 text-slate-600">booking grup</span>
+                        )}
                       </div>
                       <p className="text-sm text-slate-700 mt-1.5">{t.nama}</p>
                       <p className="text-[11px] text-slate-400 mt-1">

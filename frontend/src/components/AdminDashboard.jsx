@@ -6,6 +6,7 @@ import {
   Footprints,
   Loader2,
   Package,
+  Receipt,
   TrendingDown,
   TrendingUp,
   Minus,
@@ -67,6 +68,8 @@ const RINGKASAN_KOSONG = {
   masih_jalan: 0,
   total_komisi: 0,
   sisa_untuk_outlet: 0,
+  total_pengeluaran: 0,
+  sisa_bersih: 0,
   periode: { label: "-", granularitas: "hari" },
 };
 
@@ -200,6 +203,8 @@ export default function AdminDashboard() {
       ["Omzet", r.total_pendapatan ?? 0],
       ["Komisi teknisi", r.total_komisi ?? 0],
       ["Sisa untuk outlet", r.sisa_untuk_outlet ?? 0],
+      ["Pengeluaran operasional", r.total_pengeluaran ?? 0],
+      ["Sisa bersih (setelah pengeluaran)", r.sisa_bersih ?? 0],
       ["Perubahan omzet vs periode sebelumnya (%)", growth ?? ""],
       ["Omzet periode sebelumnya", fakta.periode_lalu_omzet ?? ""],
       ["Masih dikerjakan (semua periode)", r.masih_jalan ?? 0],
@@ -313,9 +318,16 @@ export default function AdminDashboard() {
       warna: "bg-violet-50 text-violet-600",
     },
     {
-      label: "Sisa untuk Outlet",
-      value: formatRupiah(r.sisa_untuk_outlet),
-      sub: `setelah komisi teknisi ${formatRupiah(r.total_komisi)}`,
+      label: "Pengeluaran",
+      value: formatRupiah(r.total_pengeluaran),
+      sub: "listrik, PDAM, dan biaya operasional lain",
+      icon: Receipt,
+      warna: "bg-rose-50 text-rose-600",
+    },
+    {
+      label: "Sisa Bersih",
+      value: formatRupiah(r.sisa_bersih),
+      sub: `omzet − komisi ${formatRupiah(r.total_komisi)} − pengeluaran ${formatRupiah(r.total_pengeluaran)}`,
       icon: Users,
       warna: "bg-cyan-50 text-cyan-600",
     },
@@ -384,7 +396,7 @@ export default function AdminDashboard() {
       )}
 
       {/* Kartu angka */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {cards.map((c) => (
           <div key={c.label} className="card p-5">
             <div

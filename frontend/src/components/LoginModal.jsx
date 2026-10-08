@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, useLocation, Link } from 'react-router-dom'
 import {
-  Footprints,
   LogIn,
   UserPlus,
   Eye,
@@ -13,6 +12,7 @@ import {
   Info,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import Logo from './Logo'
 import { cn } from '../utils/helpers'
 
 /* ---------------------------------------------------------------- */
@@ -291,9 +291,7 @@ export default function LoginModal() {
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
           <div className="text-center mb-6">
-            <div className="inline-flex h-12 w-12 rounded-2xl bg-primary-600 items-center justify-center mb-3">
-              <Footprints className="h-6 w-6 text-white" />
-            </div>
+            <Logo className="h-12 w-12 mx-auto mb-3" fallbackClassName="bg-primary-600 rounded-2xl" />
             <h1 className="text-2xl font-bold text-slate-900">Masuk</h1>
             <p className="text-sm text-slate-500 mt-1">
               Selamat datang kembali di <span className="font-medium text-slate-700">Komang SAC</span>
@@ -362,9 +360,7 @@ export default function LoginModal() {
         {/* Panel kiri — alasan daftar */}
         <div className="md:col-span-2 bg-primary-700 text-white p-8 flex flex-col">
           <div className="flex items-center gap-2 mb-8">
-            <div className="h-9 w-9 rounded-xl bg-white/15 flex items-center justify-center">
-              <Footprints className="h-5 w-5 text-white" />
-            </div>
+            <Logo variant="putih" className="h-9 w-9" fallbackClassName="bg-white/15 rounded-xl" />
             <span className="font-bold text-lg">Komang SAC</span>
           </div>
 

@@ -44,6 +44,11 @@ api.interceptors.response.use(
 
 /* ------------------------------------------------------------------ */
 
+/** Konfigurasi publik: info bisnis + metode bayar yang diterima outlet. */
+export const configApi = {
+  get: () => api.get("/api/config"),
+};
+
 export const authApi = {
   login: (phone, password) => api.post("/api/auth/login", { phone, password }),
   register: (data) => api.post("/api/auth/register", data),
@@ -67,6 +72,8 @@ export const transactionsApi = {
   /** Cek status pakai nomor tracking (KS-XXXXXX) — endpoint publik */
   tracking: (kode) =>
     api.get(`/api/transaksi/tracking/${encodeURIComponent(kode)}`),
+  /** Semua pasang dalam satu booking multi-pasang — endpoint publik */
+  grup: (grupId) => api.get(`/api/transaksi/grup/${encodeURIComponent(grupId)}`),
   create: (data) => api.post("/api/transaksi", data),
   updateStatus: (id, data) => api.put(`/api/transaksi/${id}/status`, data),
   update: (id, data) => api.put(`/api/transaksi/${id}`, data),
@@ -106,6 +113,16 @@ export const stockApi = {
   update: (id, data) => api.put(`/api/stock/${id}`, data),
   reduce: (id, jumlah) =>
     api.post(`/api/stock/${id}/kurangi`, null, { params: { jumlah } }),
+};
+
+/** Pengeluaran operasional (listrik, PDAM, dll.). Semua admin-only. */
+export const expensesApi = {
+  list: (params) => api.get("/api/expenses", { params }),
+  /** Total per minggu (Senin–Minggu WIB), 8 minggu terakhir. */
+  rekapMingguan: () => api.get("/api/expenses/rekap-mingguan"),
+  create: (data) => api.post("/api/expenses", data),
+  update: (id, data) => api.put(`/api/expenses/${id}`, data),
+  remove: (id) => api.delete(`/api/expenses/${id}`),
 };
 
 export const statsApi = {
