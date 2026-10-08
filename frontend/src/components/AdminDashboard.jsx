@@ -29,7 +29,7 @@ import {
 } from "../utils/helpers";
 import { keParameter, labelPeriode, periodeAwal } from "../utils/periode";
 import AnalyticsSummary from "./AnalyticsSummary";
-import GrafikBatang, { GrafikBatangHorizontal } from "./admin/Grafik";
+import GrafikBatang from "./admin/Grafik";
 import PilihPeriode from "./admin/PilihPeriode";
 import { toast } from "./Toast";
 
@@ -99,6 +99,101 @@ function TrenBadge({ persen, teks }) {
       <Icon className="h-3 w-3" />
       {Math.abs(persen)}% {teks || "vs periode sebelumnya"}
     </span>
+  );
+}
+
+/**
+ * Performa tiap teknisi untuk satu periode: berapa pasang yang dikerjakan,
+ * berapa komisinya, dan berapa persen kontribusinya terhadap total.
+ *
+ * Diurutkan dari pekerjaan TERBANYAK, bukan dari komisi terbesar. Karena
+ * komisi = 40% dari harga dan harga tiap layanan berbeda, mengurutkan berdasar
+ * rupiah membuat teknisi yang kebetulan menerima servis repaint mahal tampak
+ * "paling produktif" padahal jumlah cucinya paling sedikit. Angka komisi tetap
+ * ditampilkan karena ini panel admin, satu-satunya peran yang boleh
+ * melihatnya.
+ */
+function PerformaTeknisi({ data, label }) {
+  const baris = useMemo(
+    () =>
+      [...(data || [])].sort(
+        (a, b) => (b.jumlah_pekerjaan || 0) - (a.jumlah_pekerjaan || 0),
+      ),
+    [data],
+  );
+  const totalPekerjaan = baris.reduce((a, t) => a + (t.jumlah_pekerjaan || 0), 0);
+  const totalKomisi = baris.reduce((a, t) => a + (t.tech_commission || 0), 0);
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-5 py-4 border-b border-slate-100">
+        <h2 className="font-semibold text-slate-900">Performa Teknisi</h2>
+        <p className="text-xs text-slate-500 mt-0.5">
+          Per {label} · diurutkan dari pekerjaan terbanyak · komisi 40% dari harga
+        </p>
+      </div>
+
+      {baris.length === 0 ? (
+        <p className="px-5 py-8 text-center text-sm text-slate-400">
+          Belum ada teknisi terdaftar.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
+              <tr>
+                <th className="px-5 py-2.5 text-left font-medium">Teknisi</th>
+                <th className="px-3 py-2.5 text-right font-medium">Pasang</th>
+                <th className="px-5 py-2.5 text-right font-medium">Komisi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {baris.map((t) => {
+                const kontribusi =
+                  totalKomisi > 0
+                    ? Math.round(((t.tech_commission || 0) / totalKomisi) * 100)
+                    : 0;
+                return (
+                  <tr key={t.id} className="hover:bg-slate-50/60">
+                    <td className="px-5 py-3 min-w-0">
+                      <p className="font-medium text-slate-900 truncate">
+                        {t.full_name}
+                      </p>
+                      <div className="mt-1 h-1.5 w-full max-w-[7rem] rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-primary-500"
+                          style={{ width: `${kontribusi}%` }}
+                        />
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 text-right font-semibold text-slate-900">
+                      {t.jumlah_pekerjaan || 0}
+                    </td>
+                    <td className="px-5 py-3 text-right text-slate-600 whitespace-nowrap">
+                      {formatRupiah(t.tech_commission)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot className="bg-slate-50 text-xs font-semibold text-slate-700">
+              <tr>
+                <td className="px-5 py-3 uppercase tracking-wide">Total</td>
+                <td className="px-3 py-3 text-right">{totalPekerjaan}</td>
+                <td className="px-5 py-3 text-right whitespace-nowrap">
+                  {formatRupiah(totalKomisi)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      <p className="px-5 py-3 text-[11px] text-slate-500 border-t border-slate-100">
+        Untuk mengevaluasi satu teknisi lintas periode, pakai filter teknisi di
+        halaman <strong>Transaksi</strong> lalu atur rentang tanggalnya.
+      </p>
+    </div>
   );
 }
 
@@ -299,7 +394,7 @@ export default function AdminDashboard() {
     {
       label: "Sepatu Dicuci",
       value: r.shoes_washed,
-      sub: "pekerjaan selesai di periode ini",
+      sub: <TrenBadge persen={fakta.perubahan_transaksi_persen} />,
       icon: Footprints,
       warna: "bg-blue-50 text-blue-600",
     },
@@ -527,23 +622,8 @@ export default function AdminDashboard() {
         </div>
 
         <div className="space-y-6">
-          {/* Komisi teknisi -- periode berjalan */}
-          <div className="card p-5">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="font-semibold text-slate-900">Komisi Teknisi</h2>
-              <span className="text-xs text-slate-500">40% dari harga</span>
-            </div>
-            <p className="text-xs text-slate-500 mb-4">Per {label}</p>
-            <GrafikBatangHorizontal
-              data={(r.per_teknisi || []).map((t) => ({
-                kunci: t.id,
-                nama: t.full_name,
-                nilai: t.tech_commission,
-                keterangan: `${t.jumlah_pekerjaan} pekerjaan`,
-              }))}
-              label="Tinggi batang sebanding dengan komisi. Angka di sebelahnya sudah diformat sebagai rupiah."
-            />
-          </div>
+          {/* Performa per teknisi -- periode berjalan */}
+          <PerformaTeknisi data={r.per_teknisi} label={label} />
 
           {/* Stok menipis -- kondisi sekarang */}
           <div className="card overflow-hidden">

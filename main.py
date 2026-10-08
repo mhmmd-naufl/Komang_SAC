@@ -1101,6 +1101,49 @@ def set_password(payload: PasswordSet, user: dict = Depends(get_current_user)):
         "is_verified": user.get("is_verified", False),
     }
 
+
+class PasswordReset(BaseModel):
+    """Password baru untuk pengguna lain. Panjang minimum sama dengan register."""
+    password: str = Field(..., min_length=6)
+
+
+@app.post("/api/users/{user_id}/reset-password", response_model=UserPublic, tags=["Users"])
+def admin_reset_password(
+    user_id: str,
+    payload: PasswordReset,
+    _: dict = Depends(require_role("admin")),
+):
+    """
+    Admin mengganti password pengguna lain.
+
+    Ini jalur pemulihan akses yang paling sederhana dan gratis: konsumen yang
+    lupa password cukup menelepon admin, tanpa alur email atau reset-link yang
+    butuh layanan tambahan. Password lama tidak dibaca, tidak divalidasi, dan
+    tidak pernah dikirim balik -- hanya hash barunya yang ditulis.
+
+    Beda dengan /api/auth/set-password (self-service), endpoint ini sengaja
+    admin-only: tanpa itu siapa pun yang tahu UUID orang lain bisa mengambil
+    alih akunnya.
+    """
+    result = (
+        supabase.from_("profiles")
+        .update({"password_hash": hash_password(payload.password)})
+        .eq("id", user_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(404, "Pengguna tidak ditemukan")
+
+    u = result.data[0]
+    return {
+        "id": u["id"],
+        "full_name": u["full_name"],
+        "phone": u["phone"],
+        "role": u["role"],
+        "is_verified": u.get("is_verified", False),
+    }
+
+
 def _create_user_with_password(full_name: str, phone: str, password: str, role: str):
     normalized = normalize_phone(phone)
     existing = supabase.from_("profiles").select("id").eq("phone", normalized).execute()
@@ -1719,7 +1762,13 @@ def list_transaksi(
 
         if status:
             query = query.eq("status", status)
-        if tech_id:
+        if tech_id == "null":
+            # "Belum ditugaskan". PostgREST membedakan string "null" dari SQL
+            # NULL, jadi eq("tech_id", "null") akan mencari literal 'null' dan
+            # selalu kosong -- harus lewat is_(). Filter ini tetap aman untuk
+            # non-admin karena tech_id sudah dipaksa None di atas.
+            query = query.is_("tech_id", "null")
+        elif tech_id:
             query = query.eq("tech_id", tech_id)
         if drop_point_id:
             query = query.eq("drop_point_id", drop_point_id)
@@ -1909,10 +1958,16 @@ def update_transaksi_status(
     #   keluar final -> kosongkan lagi; pekerjaan diropan belum selesai
     #
     # Transaksi lama yang sudah berstatus Selesai sebelum kolom ini ada tidak
-    # bisa ditebak ulang, jadi selected_at hanya diisi kalau statusnya sedang
-    # berubah -- biarkan yang sudah lewat tetap NULL.
+    # bisa ditebak ulang, jadi selesai_at hanya diisi kalau statusnya memang
+    # SEDANG BERUBAH -- biarkan yang sudah lewat tetap NULL.
+    #
+    # Pengecekan `update.status != current["status"]` ini wajib, bukan sekadar
+    # "sudah terisi atau belum". Tanpa itu, teknisi yang menyimpan catatan pada
+    # pekerjaan berstatus Selesai (statusnya dikirim ulang tanpa berubah) akan
+    # menulis selesai_at = hari ini, dan pekerjaan lama itu tiba-tiba masuk ke
+    # omzet bulan ini.
     if update.status in ("Selesai", "Siap diambil"):
-        if not current.get("selesai_at"):
+        if not current.get("selesai_at") and update.status != current.get("status"):
             data["selesai_at"] = get_now_iso()
     else:
         data["selesai_at"] = None

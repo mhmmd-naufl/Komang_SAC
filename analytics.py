@@ -219,6 +219,24 @@ def _growth(sekarang: list[dict], lalu: list[dict]) -> Optional[float]:
     return round((a - b) / b * 100, 1)
 
 
+def _growth_jumlah(sekarang: list[dict], lalu: list[dict]) -> Optional[float]:
+    """
+    Perubahan persen JUMLAH pekerjaan (bukan omzet).
+
+    Dipisah dari _growth karena keduanya bisa bergerak berlawanan: omzet bisa
+    naik hanya karena satu servis repaint mahal, sementara jumlah cucian justru
+    turun. Dashboard admin menampilkan keduanya supaya "omzet naik" tidak
+    disimpulkan sebagai "lebih banyak pelanggan" tanpa dicek dulu.
+
+    None kalau periode pembanding kosong -- membagi nol menghasilkan angka yang
+    tidak artinya, dan "belum ada pembanding" lebih jujur daripada Infinity%.
+    """
+    a, b = len(sekarang), len(lalu)
+    if b == 0:
+        return None
+    return round((a - b) / b * 100, 1)
+
+
 def _ribuan(n: int) -> str:
     """Ringkas untuk narasi: 1500000 -> 'Rp 1,5 juta'."""
     if n >= 1_000_000:
@@ -561,7 +579,9 @@ def gather_facts(
         "grafik": grafik,
         "tren_harian": grafik if granularitas == "hari" else [],
         "perubahan_omzet_persen": _growth(dalam_periode, lalu),
+        "perubahan_transaksi_persen": _growth_jumlah(dalam_periode, lalu),
         "periode_lalu_omzet": _omzet(lalu),
+        "periode_lalu_transaksi": len(lalu),
 
         # --- pembanding bergulir (dipakai untuk kartu info) ---
         "transaksi_7h": len(seit_7h),

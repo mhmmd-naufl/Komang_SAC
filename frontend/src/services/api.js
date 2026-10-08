@@ -97,6 +97,12 @@ export const usersApi = {
   create: (data) => api.post("/api/users", data),
   createWithPassword: (data) => api.post("/api/users/with-password", data),
   update: (id, data) => api.put(`/api/users/${id}`, data),
+  /**
+   * Admin mengganti password pengguna lain. Ini jalur pemulihan akses termurah
+   * dan tanpa layanan tambahan: konsumen lupa password -> admin setel ulang.
+   */
+  resetPassword: (id, password) =>
+    api.post(`/api/users/${id}/reset-password`, { password }),
 };
 
 export const dropPointsApi = {

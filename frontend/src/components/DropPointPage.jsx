@@ -12,6 +12,7 @@ import {
 import { transactionsApi, shoesApi, dropPointsApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { getStatusConfig, formatRupiah, formatDateTime, cn } from '../utils/helpers'
+import { tanggalWib } from '../utils/periode'
 import { SearchInput } from './AdminUi'
 
 /**
@@ -100,6 +101,20 @@ export default function DropPointPage() {
     return out
   }, [transaksi])
 
+  /**
+   * Berapa titipan yang MASUK hari ini (WIB).
+   *
+   * Pakai `created_at`, bukan `selesai_at`: yang ingin diketahui mitra adalah
+   * berapa barang yang harus ia terima dan serahkan hari ini, bukan berapa yang
+   * rampung. Dihitung dari seluruh `transaksi` (bukan `hasil`) supaya angkanya
+   * tidak ikut berubah saat mitra mengetik di kolom pencarian.
+   */
+  const masukHariIni = useMemo(() => {
+    const hari = tanggalWib(new Date())
+    if (!hari) return 0
+    return transaksi.filter((t) => tanggalWib(t.created_at) === hari).length
+  }, [transaksi])
+
   /** Link wa.me -- semi-manual: sistem menyalin template, partner yang kirim. */
   const linkWa = (nomor, pesan) =>
     `https://wa.me/${String(nomor || '').replace(/\D/g, '')}?text=${encodeURIComponent(pesan)}`
@@ -155,8 +170,9 @@ export default function DropPointPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
+          { label: 'Masuk hari ini', nilai: masukHariIni, cls: 'bg-blue-500' },
           { label: 'Semua', nilai: transaksi.length, cls: 'bg-slate-200' },
           { label: 'Sedang diproses', nilai: hitungStatus.Diproses || 0, cls: 'bg-amber-400' },
           { label: 'Selesai', nilai: hitungStatus.Selesai || 0, cls: 'bg-emerald-500' },

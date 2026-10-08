@@ -1,17 +1,18 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   Download,
   Eye,
   ImageOff,
   Loader2,
+  MessageCircle,
   MessageSquare,
   Wallet,
 } from 'lucide-react'
 import { useCariTunda, useTabel } from '../../hooks/useTabel'
 import { ambilSemua, unduhCsv } from '../../utils/csv'
 import { cn, adaRentang, formatDateTime, formatRupiah, getStatusConfig } from '../../utils/helpers'
-import { transactionsApi } from '../../services/api'
+import { transactionsApi, usersApi } from '../../services/api'
 import { toast } from '../Toast'
 import Pagination from '../Pagination'
 import Modal, { Field, GagalMuat, Kosong, Memuat, SearchInput } from '../AdminUi'
@@ -55,20 +56,68 @@ export function tautanWa(nomor, pesan) {
   return `https://wa.me/${bersih}${pesan ? `?text=${encodeURIComponent(pesan)}` : ''}`
 }
 
+/**
+ * Satu pesan WhatsApp yang berisi pemberitahuan status SEKALIGUS invoice.
+ *
+ * Sengaja digabung: pelanggan yang diberi tahu "sudah siap diambil" hampir
+ * selalu perlu langsung tahu berapa yang harus dibayar, dan kalau dikirim dua
+ * pesan terpisah yang kedua sering tidak terbaca. Format teks polos (bukan PDF)
+ * supaya bisa langsung ditempel dan dibaca di HP apa pun tanpa layanan tambahan.
+ */
+export function pesanWa(t) {
+  const nama = t.customer?.full_name?.trim() || ''
+  const layanan = [t.shoe?.merk, t.shoe?.model].filter(Boolean).join(' ') || 'Cuci sepatu'
+  const metode = String(t.payment_method || '').replace(/_/g, ' ').trim()
+
+  return [
+    `Halo${nama ? ` ${nama}` : ''},`,
+    '',
+    `Pesanan *${t.kode || '-'}* berstatus *${t.status}*.`,
+    '',
+    '*Invoice*',
+    `Layanan: ${layanan}`,
+    `Harga: ${formatRupiah(t.harga)}`,
+    ...(metode ? [`Pembayaran: ${metode.toUpperCase()}`] : []),
+    ...(t.status === 'Siap diambil' ? ['', 'Silakan ambil di outlet pada jam buka.'] : []),
+    '',
+    'Terima kasih sudah mempercayakan sepatunya ke Komang SAC 🙏',
+  ].join('\n')
+}
+
 export default function AdminTransaksi() {
   const tabel = useTabel({ endpoint: '/api/transaksi' })
   const { setFilter } = tabel
   const [cari, setCari] = useCariTunda(setFilter)
 
   const [statusAktif, setStatusAktif] = useState('')
+  const [teknisiAktif, setTeknisiAktif] = useState('')
   const [urutAktif, setUrutAktif] = useState('terbaru')
   const [dari, setDari] = useState('')
   const [sampai, setSampai] = useState('')
   const [detail, setDetail] = useState(null)
   const [ekspor, setEkspor] = useState(false)
+  // Daftar teknisi hanya untuk isi dropdown filter. Gagal memuat di sini bukan
+  // masalah fatal: filter teknisi hilang, tapi tabel tetap bisa dipakai.
+  const [teknisi, setTeknisi] = useState([])
+
+  useEffect(() => {
+    let batal = false
+    usersApi
+      .list({ role: 'technician', urut: 'nama' })
+      .then((res) => {
+        if (!batal) setTeknisi(Array.isArray(res.data) ? res.data : [])
+      })
+      .catch(() => {
+        /* filter teknisi bersifat pelengkap; jangan gagalkan seluruh halaman */
+      })
+    return () => {
+      batal = true
+    }
+  }, [])
 
   // Cerminan filter untuk tombol reset dan label "ada filter aktif".
-  const adaFilter = Boolean(cari) || Boolean(statusAktif) || Boolean(dari) || Boolean(sampai)
+  const adaFilter =
+    Boolean(cari) || Boolean(statusAktif) || Boolean(teknisiAktif) || Boolean(dari) || Boolean(sampai)
 
   const filterTanggal = useMemo(
     () => ({
@@ -81,6 +130,13 @@ export default function AdminTransaksi() {
   const gantiStatus = (nilai) => {
     setStatusAktif(nilai)
     setFilter({ status: nilai || undefined })
+  }
+
+  // Backend membatasi `tech_id` hanya untuk admin/drop point, jadi filter ini
+  // aman: teknisi atau konsumen yang iseng mengirimkannya tetap diabaikan.
+  const gantiTeknisi = (nilai) => {
+    setTeknisiAktif(nilai)
+    setFilter({ tech_id: nilai || undefined })
   }
 
   const gantiUrut = (nilai) => {
@@ -99,9 +155,17 @@ export default function AdminTransaksi() {
 
   const resetSemua = () => {
     setStatusAktif('')
+    setTeknisiAktif('')
     setUrutAktif('terbaru')
     setCari('')
-    setFilter({ q: undefined, status: undefined, urut: 'terbaru', dari: undefined, sampai: undefined })
+    setFilter({
+      q: undefined,
+      status: undefined,
+      tech_id: undefined,
+      urut: 'terbaru',
+      dari: undefined,
+      sampai: undefined,
+    })
   }
 
   const jalankanEkspor = async () => {
@@ -114,6 +178,7 @@ export default function AdminTransaksi() {
         perPage: 200,
         q: cari || undefined,
         status: statusAktif || undefined,
+        tech_id: teknisiAktif || undefined,
         urut: urutAktif,
         ...filterTanggal,
       })
@@ -150,7 +215,7 @@ export default function AdminTransaksi() {
       judul={adaFilter ? 'Tidak ada transaksi' : 'Belum ada transaksi'}
       pesan={
         adaFilter
-          ? 'Tidak ada transaksi yang cocok dengan kata kunci, status, atau rentang tanggal ini.'
+          ? 'Tidak ada transaksi yang cocok dengan kata kunci, status, teknisi, atau rentang tanggal ini.'
           : 'Transaksi muncul di sini begitu pelanggan menyewa jasa cuci.'
       }
       action={adaFilter && (
@@ -211,14 +276,28 @@ export default function AdminTransaksi() {
                   {formatRupiah(t.tech_commission)}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <button
-                    onClick={() => setDetail(t)}
-                    className="p-2 rounded-lg text-slate-400 hover:bg-primary-50 hover:text-primary-600"
-                    title="Lihat detail"
-                    aria-label={`Lihat detail ${t.kode || ''}`}
-                  >
-                    <Eye className="h-4 w-4" />
-                  </button>
+                  <div className="flex items-center justify-end gap-1">
+                    {t.customer?.phone && (
+                      <a
+                        href={tautanWa(t.customer.phone, pesanWa(t))}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-2 rounded-lg text-slate-400 hover:bg-emerald-50 hover:text-emerald-600"
+                        title="Kirim status + invoice via WhatsApp"
+                        aria-label={`Kirim WhatsApp invoice ${t.kode || ''}`}
+                      >
+                        <MessageCircle className="h-4 w-4" />
+                      </a>
+                    )}
+                    <button
+                      onClick={() => setDetail(t)}
+                      className="p-2 rounded-lg text-slate-400 hover:bg-primary-50 hover:text-primary-600"
+                      title="Lihat detail"
+                      aria-label={`Lihat detail ${t.kode || ''}`}
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             )
@@ -267,6 +346,23 @@ export default function AdminTransaksi() {
                 </option>
               ))}
             </select>
+
+            {teknisi.length > 0 && (
+              <select
+                value={teknisiAktif}
+                onChange={(e) => gantiTeknisi(e.target.value)}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 focus:border-primary-500 focus:outline-none"
+                aria-label="Filter teknisi"
+              >
+                <option value="">Semua teknisi</option>
+                <option value="null">Belum ditugaskan</option>
+                {teknisi.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.full_name}
+                  </option>
+                ))}
+              </select>
+            )}
 
             <select
               value={urutAktif}
@@ -514,10 +610,7 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
   if (!transaksi) return null
   const t = transaksi
   const cfg = getStatusConfig(t.status)
-  const wa = tautanWa(
-    t.customer?.phone,
-    `Halo ${t.customer?.full_name || ''}, cucian Anda (${t.kode || ''}) sudah *${t.status}*. Silakan ambil di outlet.`,
-  )
+  const wa = tautanWa(t.customer?.phone, pesanWa(t))
 
   return (
     <Modal
@@ -533,7 +626,8 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
           </button>
           {wa && (
             <a href={wa} target="_blank" rel="noreferrer" className="btn-primary flex-1">
-              Hubungi Pelanggan
+              <MessageCircle className="h-4 w-4" />
+              Kirim Invoice WhatsApp
             </a>
           )}
         </div>

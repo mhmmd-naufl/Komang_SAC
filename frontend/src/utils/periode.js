@@ -28,6 +28,27 @@ export const NAMA_BULAN = [
   'Desember',
 ]
 
+/** Offset WIB (UTC+7) dalam milidetik. */
+const OFFSET_WIB = 7 * 60 * 60 * 1000
+
+/**
+ * Tanggal versi WIB sebagai string "YYYY-MM-DD", dari string ISO atau Date.
+ *
+ * Kolom waktu di database (created_at, selesai_at) disimpan dalam UTC, jadi
+ * tanpa penggeseran ini pekerjaan yang masuk pukul 02.00 WIB tanggal 9 Oktober
+ * ikut terbaca tanggal 8 Oktober -- hitungan "hari ini" akan selalu meleset
+ * beberapa jam, dan melesetnya berubah di jam 00.00 UTC (07.00 WIB).
+ *
+ * Kembalikan null untuk input kosong atau rusak supaya pemanggil bisa
+ * melewati barisnya, bukan menghitung "tanggal NaN".
+ */
+export function tanggalWib(iso) {
+  if (!iso) return null
+  const d = iso instanceof Date ? iso : new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return new Date(d.getTime() + OFFSET_WIB).toISOString().slice(0, 10)
+}
+
 /**
  * Periode default saat dashboard dibuka: bulan berjalan (minimal 2026).
  * Sekarang mendukung multi-select untuk bulan dan tahun.

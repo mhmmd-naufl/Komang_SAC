@@ -6,6 +6,9 @@ import { useAuth } from '../contexts/AuthContext'
 import { toast } from './Toast'
 import { formatDate, formatRupiah, hargaLayanan, cn } from '../utils/helpers'
 
+// Logo biru sebagai default image untuk layanan
+const LOGO_LAYANAN = '/assets/logo-biru.png'
+
 // DAFTAR TREATMENT TIDAK ADA DI SINI, dan itu disengaja.
 // Dulu ada tombol pilihan "Standar / Premium / Steri / Waterproof" yang
 // disconnected: nilainya tidak pernah dikirim ke backend, dan backend pun
@@ -378,8 +381,13 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
                   <div className="space-y-2">
                     {rincianHarga.map(({ item, harga }, i) => (
                       <div key={`${item.id}-${i}`} className="bg-primary-50 border border-primary-100 rounded-xl p-3.5 flex items-start gap-3">
-                        <div className="h-9 w-9 rounded-xl bg-primary-100 flex items-center justify-center flex-shrink-0">
-                          <Footprints className="h-4 w-4 text-primary-600" />
+                        <div className="h-9 w-9 rounded-xl bg-white border border-primary-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                          <img
+                            src={LOGO_LAYANAN}
+                            alt={namaLayanan(item)}
+                            className="h-6 w-6 object-contain"
+                            loading="lazy"
+                          />
                         </div>
                         <div className="flex-1 min-w-0">
                           <h3 className="text-sm font-medium text-slate-900">{namaLayanan(item)}</h3>

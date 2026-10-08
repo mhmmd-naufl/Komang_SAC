@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { KeyRound, Loader2, Pencil, Plus, ShieldCheck, UserCheck } from 'lucide-react'
+import { KeyRound, Loader2, Lock, Pencil, Plus, ShieldCheck, UserCheck } from 'lucide-react'
 import { usersApi } from '../../services/api'
 import { useCariTunda, useTabel } from '../../hooks/useTabel'
 import { cn, formatDate, getRoleColor, getRoleLabel } from '../../utils/helpers'
@@ -49,6 +49,10 @@ export default function AdminUsers() {
   const [errors, setErrors] = useState({})
   const [simpan, setSimpan] = useState(false)
   const [kunci, setKunci] = useState(null)
+  // Pengguna yang sedang dimintai password barunya, beserta isian dan errornya.
+  const [reset, setReset] = useState(null)
+  const [kataSandi, setKataSandi] = useState('')
+  const [errorSandi, setErrorSandi] = useState('')
 
   const gantiPeran = (nilai) => {
     setPeranAktif(nilai)
@@ -149,6 +153,43 @@ export default function AdminUsers() {
     }
   }
 
+  const bukaReset = (baris) => {
+    setReset(baris)
+    setKataSandi('')
+    setErrorSandi('')
+  }
+
+  /**
+   * Kirim password baru ke backend.
+   *
+   * Ini jalur pemulihan akses termurah dan paling sederhana: tanpa email,
+   * tanpa tautan reset, tanpa layanan tambahan. Konsumen lupa password ->
+   * admin ketik password baru -> konsumen login lagi. Panjang minimum 6
+   * karakter disamakan dengan aturan register supaya tidak ada akun yang
+   * jadi lebih lemah lewat jalur ini.
+   */
+  const kirimReset = async () => {
+    if (kataSandi.length < 6) {
+      setErrorSandi('Minimal 6 karakter')
+      return
+    }
+    setErrorSandi('')
+    setSimpan(true)
+    try {
+      await usersApi.resetPassword(reset.id, kataSandi)
+      toast.success(
+        'Password diatur ulang',
+        `Password ${reset.full_name} sudah diganti. Sampaikan barunya ke pengguna, lalu minta ia menggantinya setelah login.`,
+        { duration: 9000 },
+      )
+      setReset(null)
+    } catch (err) {
+      setErrorSandi(err.friendlyMessage || err.message)
+    } finally {
+      setSimpan(false)
+    }
+  }
+
   const adaFilter = Boolean(cari) || Boolean(peranAktif)
   const formDariBaris = (baris) => ({
     id: baris.id,
@@ -214,6 +255,14 @@ export default function AdminUsers() {
                     aria-label={`Ganti peran ${baris.full_name}`}
                   >
                     <ShieldCheck className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => bukaReset(baris)}
+                    className="p-2 rounded-lg text-slate-400 hover:bg-amber-50 hover:text-amber-600"
+                    title="Atur ulang password"
+                    aria-label={`Atur ulang password ${baris.full_name}`}
+                  >
+                    <Lock className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => bukaEdit(baris)}
@@ -442,6 +491,67 @@ export default function AdminUsers() {
                 </p>
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(reset)}
+        onClose={() => setReset(null)}
+        title="Atur Ulang Password"
+        lebar="max-w-md"
+        description="Dipakai saat pengguna lupa password. Tanpa email dan tanpa tautan reset."
+        footer={
+          <div className="flex gap-3">
+            <button
+              onClick={() => setReset(null)}
+              className="btn-secondary flex-1"
+              disabled={simpan}
+            >
+              Batal
+            </button>
+            <button onClick={kirimReset} className="btn-primary flex-1" disabled={simpan}>
+              {simpan && <Loader2 className="h-4 w-4 animate-spin" />}
+              Ganti Password
+            </button>
+          </div>
+        }
+      >
+        {reset && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3">
+              <div className="h-10 w-10 shrink-0 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 font-semibold">
+                {reset.full_name?.charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="font-medium text-slate-900 truncate">{reset.full_name}</p>
+                <p className="text-xs text-slate-500 font-mono">{reset.phone}</p>
+              </div>
+            </div>
+
+            <Field
+              label="Password baru"
+              required
+              error={errorSandi}
+              hint="Minimal 6 karakter. Ditampilkan apa adanya supaya bisa langsung disampaikan ke pengguna; password lama tidak dibutuhkan."
+            >
+              <input
+                type="text"
+                value={kataSandi}
+                onChange={(e) => setKataSandi(e.target.value)}
+                className={cn('input', errorSandi && 'input-error')}
+                placeholder="misalnya banyuwangi123"
+                autoComplete="new-password"
+              />
+            </Field>
+
+            <div className="flex gap-3 rounded-xl bg-amber-50 p-3">
+              <Lock className="h-4 w-4 shrink-0 mt-0.5 text-amber-600" />
+              <p className="text-xs text-amber-800">
+                Password ini langsung berlaku. Pengguna yang sedang login tidak dikeluarkan otomatis,
+                jadi kalau akunnya dicurigai, minta ia mengganti lagi setelah login.
+              </p>
+            </div>
           </div>
         )}
       </Modal>

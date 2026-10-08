@@ -3,6 +3,9 @@ import { Footprints } from 'lucide-react'
 import { formatRupiah, hargaLayanan, cn } from '../utils/helpers'
 import { shoesApi } from '../services/api'
 
+// Logo biru sebagai default image untuk layanan
+const LOGO_LAYANAN = '/assets/logo-biru.png'
+
 // Tiga kelompok katalog, sama dengan daftar harga resmi Komang SAC.
 // Urutannya tidak boleh diacak: katalog ditampilkan per kelompok, jadi
 // daftar ini yang menentukan urutan tampil, bukan urutan baris dari database.
@@ -121,10 +124,15 @@ export default function Catalog({ onSelectShoe }) {
           const harga = hargaLayanan(shoe)
           return (
             <article key={shoe.id} className="card group overflow-hidden animate-fade-in flex flex-col">
-              {/* Image Placeholder */}
+              {/* Image Placeholder - Logo Biru */}
               <div className="aspect-square bg-gradient-to-br from-primary-50 to-primary-100 relative overflow-hidden">
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <Footprints className="h-16 w-16 text-primary-300" />
+                <div className="absolute inset-0 flex items-center justify-center p-6">
+                  <img
+                    src={LOGO_LAYANAN}
+                    alt={shoe.merk}
+                    className="max-h-full max-w-full object-contain opacity-80"
+                    loading="lazy"
+                  />
                 </div>
                 <div className="absolute top-3 right-3">
                   <span className={cn(

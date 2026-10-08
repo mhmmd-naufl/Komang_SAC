@@ -13,6 +13,8 @@ import {
 import { transactionsApi, stockApi, shoesApi } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 import { getStatusConfig, formatDateTime, cn } from "../utils/helpers";
+import { tanggalWib } from "../utils/periode";
+import { SearchInput } from "./AdminUi";
 
 /**
  * Halaman Teknisi.
@@ -31,6 +33,9 @@ import { getStatusConfig, formatDateTime, cn } from "../utils/helpers";
 
 const URUTAN = ["Diterima", "Diproses", "Diperiksa", "Selesai", "Siap diambil"];
 const BUTUH_FOTO_SETELAH = ["Selesai", "Siap diambil"];
+
+/** Status yang berarti pekerjaan sudah rampung (dipakai hitung dashboard). */
+const SELESAI = new Set(["Selesai", "Siap diambil"]);
 
 const STATUS_TERSEDIA = [
   "Diterima",
@@ -170,9 +175,14 @@ export default function TeknisiPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("semua");
+  const [cari, setCari] = useState("");
   const [terbuka, setTerbuka] = useState({});
   const [sibuk, setSibuk] = useState(null);
   const [pesan, setPesan] = useState(null);
+  // Draft catatan per transaksi. Disimpan terpisah dari baris supaya mengetik
+  // tidak langsung menulis ke data -- hanya tombol Simpan yang mengirim.
+  const [draftCatatan, setDraftCatatan] = useState({});
+  const [catatanSibuk, setCatatanSibuk] = useState(null);
 
   const muat = useCallback(async () => {
     setLoading(true);
@@ -209,11 +219,42 @@ export default function TeknisiPage() {
     return out;
   }, [transaksi]);
 
+  /**
+   * Dashboard sederhana: berapa pasang yang SELESAI hari ini dan bulan ini (WIB).
+   *
+   * Dihitung dari `selesai_at` yang dicatat backend -- kolom yang sama dipakai
+   * admin untuk omzet -- supaya angka teknisi dan angka admin berasal dari satu
+   * sumber kebenaran. `created_at` hanya jadi fallback untuk transaksi lama
+   * yang tercatat sebelum kolom selesai_at ada.
+   */
+  const ringkasanSelesai = useMemo(() => {
+    const kunciHari = tanggalWib(new Date());
+    const kunciBulan = kunciHari?.slice(0, 7);
+    let hari = 0;
+    let bulan = 0;
+
+    for (const t of transaksi) {
+      const selesaiPada =
+        t.selesai_at || (SELESAI.has(t.status) ? t.created_at : null);
+      if (!selesaiPada) continue;
+
+      const tanggal = tanggalWib(selesaiPada);
+      if (!tanggal) continue;
+      if (tanggal === kunciHari) hari += 1;
+      if (tanggal.slice(0, 7) === kunciBulan) bulan += 1;
+    }
+
+    return { hari, bulan };
+  }, [transaksi]);
+
   const tampil = useMemo(() => {
-    if (filter === "tersedia") return tersedia;
-    if (filter === "semua") return transaksi;
-    return transaksi.filter((t) => t.status === filter);
-  }, [transaksi, tersedia, filter]);
+    const q = cari.trim().toLowerCase();
+    const cocok = (t) => !q || (t.kode || "").toLowerCase().includes(q);
+
+    if (filter === "tersedia") return tersedia.filter(cocok);
+    if (filter === "semua") return transaksi.filter(cocok);
+    return transaksi.filter((t) => t.status === filter && cocok(t));
+  }, [transaksi, tersedia, filter, cari]);
 
   /** Nama sepatu dari katalog. Kalau katalog belum termuat, tampilkan kode pendek. */
   const namaSepatu = (shoeId) => {
@@ -289,6 +330,51 @@ export default function TeknisiPage() {
     }
   };
 
+  /**
+   * Simpan catatan teknisi untuk satu pekerjaan.
+   *
+   * Menumpang kolom `defect_notes` (satu-satunya kolom catatan teknisi yang
+   * sudah ada), bukan kolom baru: nilai ini memang tampil ke admin sebagai
+   * "Catatan teknisi" di modal detail transaksi, jadi keduanya sampai di tempat
+   * yang sama tanpa perlu migrasi skema.
+   *
+   * Status ikut dikirim ulang karena endpoint-nya mewajibkan field `status`
+   * -- nilainya TIDAK berubah, jadi tidak ada tanggal selesai yang digeser
+   * dan tidak ada teknisi yang kehilangan tugasan.
+   */
+  const simpanCatatan = async (trx) => {
+    const teks = (draftCatatan[trx.id] ?? trx.defect_notes ?? "").trim();
+    setCatatanSibuk(trx.id);
+    setPesan(null);
+    try {
+      await transactionsApi.updateStatus(trx.id, {
+        status: trx.status,
+        defect_notes: teks || null,
+      });
+      setTransaksi((prev) =>
+        prev.map((t) =>
+          t.id === trx.id ? { ...t, defect_notes: teks || null } : t,
+        ),
+      );
+      setDraftCatatan((prev) => {
+        const next = { ...prev };
+        delete next[trx.id];
+        return next;
+      });
+      setPesan({
+        ok: true,
+        teks: `Catatan untuk ${trx.kode} tersimpan dan terbaca admin.`,
+      });
+    } catch (err) {
+      setPesan({
+        ok: false,
+        teks: err?.friendlyMessage || "Gagal menyimpan catatan.",
+      });
+    } finally {
+      setCatatanSibuk(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Kepala */}
@@ -335,8 +421,18 @@ export default function TeknisiPage() {
       )}
 
       {/* Ringkasan */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
         {[
+          {
+            label: "Selesai hari ini",
+            nilai: ringkasanSelesai.hari,
+            warna: "bg-indigo-50 text-indigo-600",
+          },
+          {
+            label: "Selesai bulan ini",
+            nilai: ringkasanSelesai.bulan,
+            warna: "bg-fuchsia-50 text-fuchsia-600",
+          },
           {
             label: "Semua pekerjaan",
             nilai: transaksi.length,
@@ -374,8 +470,18 @@ export default function TeknisiPage() {
 
       {/* Daftar pekerjaan */}
       <div>
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <h2 className="text-lg font-bold text-slate-900">Pekerjaan Saya</h2>
+          <div className="w-full sm:w-72">
+            <SearchInput
+              value={cari}
+              onChange={(e) => setCari(e.target.value)}
+              placeholder="Cari kode tracking (KS-XXXXXX)..."
+            />
+          </div>
+        </div>
+
+        <div className="mb-4">
           <FilterStatus
             value={filter}
             onChange={setFilter}
@@ -397,12 +503,22 @@ export default function TeknisiPage() {
           <div className="card p-10 text-center">
             <Filter className="h-10 w-10 text-slate-300 mx-auto mb-3" />
             <p className="text-slate-600">
-              {filter === "tersedia"
-                ? "Tidak ada pekerjaan yang tersedia untuk diambil saat ini."
-                : filter === "semua"
-                  ? "Belum ada pekerjaan yang ditugaskan ke kamu."
-                  : `Tidak ada pekerjaan dengan status "${getStatusConfig(filter).label}".`}
+              {cari.trim()
+                ? `Tidak ada pekerjaan yang cocok dengan "${cari.trim()}".`
+                : filter === "tersedia"
+                  ? "Tidak ada pekerjaan yang tersedia untuk diambil saat ini."
+                  : filter === "semua"
+                    ? "Belum ada pekerjaan yang ditugaskan ke kamu."
+                    : `Tidak ada pekerjaan dengan status "${getStatusConfig(filter).label}".`}
             </p>
+            {cari.trim() && (
+              <button
+                onClick={() => setCari("")}
+                className="btn-secondary mt-3 text-xs px-3 py-1.5"
+              >
+                Bersihkan pencarian
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-3">
@@ -477,14 +593,47 @@ export default function TeknisiPage() {
                         </div>
                       )}
 
-                      {trx.defect_notes && (
+                      {/* Catatan ke admin.
+                          Hanya muncul kalau pekerjaan sudah ditugaskan
+                          (tech_id terisi). Daftar "Bisa Diambil" dikecualikan:
+                          di sana tech_id masih kosong dan backend akan
+                          mengisinya dengan penulis begitu status disimpan --
+                          jadi menulis catatan justru bisa "mengambil" pekerjaan
+                          tanpa lewat tombol klaim. */}
+                      {trx.tech_id && (
                         <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-100">
-                          <p className="text-xs font-semibold text-amber-800 mb-1">
-                            Cacat yang sudah kamu catat
-                          </p>
-                          <p className="text-sm text-amber-900">
-                            {trx.defect_notes}
-                          </p>
+                          <label
+                            htmlFor={`catatan-${trx.id}`}
+                            className="text-xs font-semibold text-amber-800 mb-1.5 flex items-center gap-1.5"
+                          >
+                            <MessageSquare className="h-3.5 w-3.5" />
+                            Catatan untuk admin
+                          </label>
+                          <textarea
+                            id={`catatan-${trx.id}`}
+                            rows={3}
+                            value={draftCatatan[trx.id] ?? trx.defect_notes ?? ""}
+                            onChange={(e) =>
+                              setDraftCatatan((p) => ({
+                                ...p,
+                                [trx.id]: e.target.value,
+                              }))
+                            }
+                            placeholder="Contoh: sol lepas di kiri, perlu lem khusus. atau: ada noda yang belum hilang."
+                            className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm text-amber-900 placeholder:text-amber-400 focus:border-amber-400 focus:outline-none resize-y"
+                          />
+                          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[11px] text-amber-700">
+                              Tampil sebagai &ldquo;Catatan teknisi&rdquo; di layar admin.
+                            </p>
+                            <button
+                              onClick={() => simpanCatatan(trx)}
+                              disabled={catatanSibuk === trx.id}
+                              className="btn-secondary bg-white px-3 py-1.5 text-xs shrink-0"
+                            >
+                              {catatanSibuk === trx.id ? "Menyimpan..." : "Simpan catatan"}
+                            </button>
+                          </div>
                         </div>
                       )}
 
