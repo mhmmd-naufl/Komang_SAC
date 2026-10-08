@@ -138,6 +138,125 @@ SELECT * FROM (VALUES
 WHERE NOT EXISTS (SELECT 1 FROM stock WHERE stock.nama_item = v.nama_item);
 
 -- =============================================================
+-- [9] expenses: PENGELUARAN OPERASIONAL (listrik, PDAM, dll.)
+-- -------------------------------------------------------------
+-- Satu baris = satu kali pengeluaran (tiap beli token listrik, tiap
+-- bayar PDAM). Kategori sengaja bebas supaya admin bisa menambah jenis
+-- pengeluaran lain (sewa, internet, gaji) tanpa ALTER TABLE.
+-- Dipakai untuk rekap mingguan dan profit bersih di dashboard.
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS expenses (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    kategori    TEXT NOT NULL,
+    jumlah      INTEGER NOT NULL CHECK (jumlah > 0),   -- rupiah
+    tanggal     DATE NOT NULL DEFAULT CURRENT_DATE,
+    keterangan  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ
+);
+
+-- Kategori dinormalisasi lowercase di backend; constraint ini pagar terakhir.
+ALTER TABLE expenses DROP CONSTRAINT IF EXISTS expenses_kategori_check;
+ALTER TABLE expenses
+    ADD CONSTRAINT expenses_kategori_check CHECK (
+        kategori ~ '^[a-z][a-z0-9 &/.,()-]{1,40}$'
+    );
+
+DROP TRIGGER IF EXISTS trg_expenses_updated_at ON expenses;
+CREATE TRIGGER trg_expenses_updated_at
+    BEFORE UPDATE ON expenses
+    FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_expenses_tanggal  ON expenses (tanggal DESC);
+CREATE INDEX IF NOT EXISTS idx_expenses_kategori ON expenses (kategori);
+
+-- RLS aktif seperti tabel lain: backend masuk lewat service-role key,
+-- anon key tidak bisa membaca data finansial ini sama sekali.
+ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
+
+-- =============================================================
+-- [10] transactions: payment_method
+-- -------------------------------------------------------------
+-- Metode bayar yang dipilih konsumen saat booking. Dulu pilihan ini
+-- hanya ada di UI dan tidak pernah tersimpan, jadi admin tidak tahu
+-- konsumen mau bayar lewat apa. Nilai divalidasi backend terhadap
+-- ACCEPTED_PAYMENTS di .env; constraint ini hanya pagar format.
+-- =============================================================
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payment_method TEXT;
+
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_payment_method_check;
+ALTER TABLE transactions
+    ADD CONSTRAINT transactions_payment_method_check CHECK (
+        payment_method IS NULL OR payment_method ~ '^[a-z_]{2,20}$'
+    );
+
+-- =============================================================
+-- [11] shoes: estimasi_hari
+-- -------------------------------------------------------------
+-- Estimasi pengerjaan per layanan. Dulu "2-3 hari kerja" di-hardcode
+-- untuk semua layanan, padahal Repaint/Reglue bisa seminggu -- janji
+-- yang salah lebih buruk daripada tidak ada janji. NULL = pakai default.
+-- =============================================================
+
+ALTER TABLE shoes ADD COLUMN IF NOT EXISTS estimasi_hari INTEGER;
+
+ALTER TABLE shoes DROP CONSTRAINT IF EXISTS shoes_estimasi_hari_check;
+ALTER TABLE shoes
+    ADD CONSTRAINT shoes_estimasi_hari_check CHECK (
+        estimasi_hari IS NULL OR (estimasi_hari >= 1 AND estimasi_hari <= 60)
+    );
+
+-- =============================================================
+-- [12] transactions: grup_id (booking multi-pasang)
+-- -------------------------------------------------------------
+-- Satu konsumen sering menitipkan beberapa pasang sekaligus. Tiap
+-- pasang TETAP satu baris transaksi (status pengerjaan memang per
+-- pasang secara fisik), dan grup_id adalah "benang" yang mengikatnya
+-- jadi satu booking. Nilainya UUID yang dibuat frontend saat submit
+-- batch; booking tunggal tidak mengisinya (NULL).
+-- =============================================================
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS grup_id UUID;
+
+CREATE INDEX IF NOT EXISTS idx_trx_grup ON transactions (grup_id) WHERE grup_id IS NOT NULL;
+
+-- =============================================================
+-- [13] ZONA WAKTU: semua kolom waktu jadi TIMESTAMPTZ
+-- -------------------------------------------------------------
+-- Gejala: jam booking/selesai di web tampil 7 jam lebih awal dari
+-- jam sebenarnya. Penyebabnya kolom dibuat sebagai `timestamp
+-- without time zone` (database lama). Backend mengirim jam UTC,
+-- kolom naive membuang penanda zonanya, dan browser menganggap
+-- string tanpa zona itu sebagai jam lokal.
+--
+-- Semua nilai lama ditulis dari jam UTC (get_now_iso), jadi konversi
+-- memakai AT TIME ZONE 'UTC'. Aman diulang: kalau kolom sudah
+-- TIMESTAMPTZ, hasilnya instan yang sama.
+-- =============================================================
+
+DO $$
+DECLARE
+    t RECORD;
+BEGIN
+    FOR t IN
+        SELECT table_name AS tbl, column_name AS col
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name IN ('profiles', 'shoes', 'drop_points', 'transactions', 'stock', 'expenses')
+          AND column_name IN ('created_at', 'updated_at', 'selesai_at', 'last_updated')
+          AND data_type = 'timestamp without time zone'
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE %I ALTER COLUMN %I TYPE TIMESTAMPTZ USING %I AT TIME ZONE ''UTC''',
+            t.tbl, t.col, t.col
+        );
+        RAISE NOTICE 'Dikonversi: %.%', t.tbl, t.col;
+    END LOOP;
+END $$;
+
+-- =============================================================
 -- [8] RLS (opsional — JANGAN aktifkan sebelum backend pakai
 --     service-role key, atau semua request dari frontend akan 401)
 -- =============================================================

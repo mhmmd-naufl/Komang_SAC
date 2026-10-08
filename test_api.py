@@ -161,6 +161,11 @@ for method, path in [
     ("PUT", "/api/drop-points/00000000-0000-0000-0000-000000000000"),
     ("GET", "/api/transaksi/00000000-0000-0000-0000-000000000000"),
     ("PUT", "/api/transaksi/00000000-0000-0000-0000-000000000000/status"),
+    ("GET", "/api/expenses"),
+    ("POST", "/api/expenses"),
+    ("GET", "/api/expenses/rekap-mingguan"),
+    ("PUT", "/api/expenses/00000000-0000-0000-0000-000000000000"),
+    ("DELETE", "/api/expenses/00000000-0000-0000-0000-000000000000"),
 ]:
     r = client.request(method, path, json={})
     check(f"{method:6} {path:52}", r.status_code in (401, 403),
@@ -473,6 +478,112 @@ if tokens.get("admin"):
         if r.status_code == 409:
             check("pesan 409 berbahasa Indonesia yang jelas",
                   "transaksi" in r.json().get("detail", "").lower(), str(r.json())[:120])
+
+
+# =============================================================
+section("16. Pengeluaran (expenses): CRUD, RBAC, validasi")
+
+if tokens.get("admin"):
+    # Kategori dinormalisasi lowercase: "Listrik" dan "listrik" harus jadi satu.
+    r = client.post("/api/expenses", headers=admin_h,
+                    json={"kategori": "Listrik", "jumlah": 100000, "keterangan": "Token mingguan"})
+    check("admin bisa mencatat pengeluaran", r.status_code == 201, f"HTTP {r.status_code}")
+    exp_id = None
+    if r.status_code == 201:
+        body = r.json()
+        exp_id = body.get("id")
+        check("kategori dinormalisasi lowercase", body.get("kategori") == "listrik",
+              f"kategori={body.get('kategori')}")
+        check("tanggal default = hari ini", bool(body.get("tanggal")), "tanggal kosong")
+
+    # Validasi: jumlah nol/negatif dan tanggal masa depan harus ditolak.
+    r = client.post("/api/expenses", headers=admin_h, json={"kategori": "pdam", "jumlah": 0})
+    check("jumlah 0 ditolak", r.status_code == 422, f"HTTP {r.status_code}")
+    r = client.post("/api/expenses", headers=admin_h,
+                    json={"kategori": "pdam", "jumlah": 50000, "tanggal": "2999-01-01"})
+    check("tanggal masa depan ditolak", r.status_code == 400, f"HTTP {r.status_code}")
+
+    # Daftar + filter kategori.
+    r = client.get("/api/expenses", headers=admin_h, params={"kategori": "listrik", "page": 1})
+    if r.status_code == 200:
+        check("filter kategori hanya mengembalikan kategori itu",
+              all(b["kategori"] == "listrik" for b in r.json()), str(r.json())[:100])
+    else:
+        check("daftar pengeluaran terbaca", False, f"HTTP {r.status_code}")
+
+    # Rekap mingguan: minggu ini harus memuat pengeluaran yang baru dicatat.
+    r = client.get("/api/expenses/rekap-mingguan", headers=admin_h)
+    check("rekap mingguan terbaca", r.status_code == 200, f"HTTP {r.status_code}")
+    if r.status_code == 200:
+        body = r.json()
+        check("riwayat berisi 8 slot minggu", len(body.get("riwayat", [])) == 8,
+              f"n={len(body.get('riwayat', []))}")
+        check("pengeluaran baru masuk minggu ini",
+              body.get("minggu_ini", {}).get("total", 0) >= 100000,
+              f"total={body.get('minggu_ini', {}).get('total')}")
+
+    # Koreksi lalu hapus catatan uji supaya tidak mengotori rekap asli.
+    if exp_id:
+        r = client.put(f"/api/expenses/{exp_id}", headers=admin_h, json={"jumlah": 125000})
+        check("admin bisa mengoreksi pengeluaran",
+              r.status_code == 200 and r.json().get("jumlah") == 125000, f"HTTP {r.status_code}")
+        r = client.delete(f"/api/expenses/{exp_id}", headers=admin_h)
+        check("admin bisa menghapus pengeluaran", r.status_code == 204, f"HTTP {r.status_code}")
+
+# Data finansial: teknisi dan konsumen tidak boleh membaca sama sekali.
+for role in ("technician", "customer"):
+    if tokens.get(role):
+        h = {"Authorization": f"Bearer {tokens[role]}"}
+        r = client.get("/api/expenses", headers=h)
+        check(f"{role} DITOLAK baca pengeluaran", r.status_code in (401, 403),
+              f"HTTP {r.status_code} -- BOCOR!")
+
+
+# =============================================================
+section("17. Config publik & metode pembayaran")
+
+r = client.get("/api/config")
+check("config publik terbaca tanpa login", r.status_code == 200, f"HTTP {r.status_code}")
+if r.status_code == 200:
+    body = r.json()
+    check("accepted_payments berisi daftar", isinstance(body.get("accepted_payments"), list),
+          str(body.get("accepted_payments")))
+    check("nomor WA bisnis ikut", bool(body.get("business_phone")), "business_phone kosong")
+
+# Metode bayar ngawur harus ditolak SEBELUM ada baris yang tertulis.
+# Uji ini sengaja hanya memakai metode yang pasti ditolak supaya tidak
+# menulis transaksi baru ke database.
+if tokens.get("customer"):
+    sepatu = client.get("/api/sepatu").json()
+    if sepatu:
+        r = client.post("/api/transaksi", headers=cust_h, json={
+            "shoe_id": sepatu[0]["id"],
+            "payment_method": "bitcoin",
+        })
+        check("metode bayar tak dikenal ditolak 400", r.status_code == 400, f"HTTP {r.status_code}")
+
+
+# =============================================================
+section("18. Estimasi layanan & booking grup (multi-pasang)")
+
+r = client.get("/api/sepatu")
+if r.status_code == 200 and r.json():
+    check("katalog publik membawa estimasi_hari", "estimasi_hari" in r.json()[0],
+          f"kunci={sorted(r.json()[0].keys())[:8]}...")
+
+# Endpoint grup: format salah -> 400, UUID valid tapi tidak ada -> 404.
+r = client.get("/api/transaksi/grup/bukan-uuid")
+check("grup_id ngawur ditolak 400", r.status_code == 400, f"HTTP {r.status_code}")
+r = client.get("/api/transaksi/grup/00000000-0000-0000-0000-000000000000")
+check("grup kosong -> 404 (bukan 500)", r.status_code == 404, f"HTTP {r.status_code}")
+
+# Konsumen boleh memfilter transaksinya berdasarkan grup; grup milik orang
+# lain tetap tidak bocor karena scope role diterapkan lebih dulu.
+if tokens.get("customer"):
+    r = client.get("/api/transaksi", headers=cust_h,
+                   params={"grup_id": "00000000-0000-0000-0000-000000000000"})
+    check("filter grup milik sendiri -> 200 dan kosong",
+          r.status_code == 200 and r.json() == [], f"HTTP {r.status_code}")
 
 
 # =============================================================

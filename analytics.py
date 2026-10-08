@@ -37,21 +37,57 @@ import json
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Model gratis. Ganti lewat .env (OPENROUTER_MODEL) kalau model ini habis kuota.
+# Model gratis. Urutan dicoba dari kiri ke kanan; kalau model pertama habis
+# kuota (429) atau dihapus dari katalog (404), yang berikutnya dipakai.
+# Atur lewat .env:
+#   OPENROUTER_MODELS -> daftar fallback, dipisah koma (prioritas utama).
+#   OPENROUTER_MODEL  -> satu model saja (kompatibel dengan .env lama).
 #
 # Catatan hasil uji (Oktober 2026, daftar /models OpenRouter):
 #   nvidia/nemotron-3-super-120b-a12b:free  -> dipakai. Cepat (~6 dtk),
 #       Bahasa Indonesia enak, tidak bocorkan proses berpikir.
 #   nvidia/nemotron-3.5-lightning:free      -> WORKS tapi emit "thinking
 #       process" ke dalam jawaban, jadi perlu _buang_pemikiran().
+#   nvidia/nemotron-3-ultra-550b-a55b:free  -> WORKS, konteks besar.
 #   google/gemma-4-31b-it:free              -> sering 429 (rate limited).
+#   google/gemma-4-26b-a4b-it:free          -> alternatif Gemma, lebih jarang 429.
 #   thinkingmachines/inkling:free           -> 403, hanya untuk agentic harness.
 DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+
+# Cadangan bawaan kalau .env tidak menyebut OPENROUTER_MODELS sama sekali.
+DEFAULT_FALLBACK_MODELS = [
+    DEFAULT_MODEL,
+    "nvidia/nemotron-3.5-lightning:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+]
+
+
+def _daftar_model() -> list[str]:
+    """
+    Daftar model yang dicoba berurutan sampai ada yang berhasil. Sumber:
+      1. OPENROUTER_MODELS (dipisah koma) -- daftar fallback lengkap.
+      2. OPENROUTER_MODEL  -- satu model, kompatibel dengan .env lama.
+      3. DEFAULT_FALLBACK_MODELS.
+    Model duplikat dibuang, urutan tetap dipertahankan.
+    """
+    mentah = os.getenv("OPENROUTER_MODELS", "").strip()
+    if mentah:
+        daftar = [m.strip() for m in mentah.split(",") if m.strip()]
+    else:
+        satu = os.getenv("OPENROUTER_MODEL", "").strip()
+        daftar = [satu] if satu else list(DEFAULT_FALLBACK_MODELS)
+    unik: list[str] = []
+    for m in daftar:
+        if m not in unik:
+            unik.append(m)
+    return unik
 
 STATUS_TAHAP = ["Diterima", "Diproses", "Diperiksa", "Selesai", "Siap diambil"]
 STATUS_FINAL = {"Selesai", "Siap diambil"}
@@ -353,6 +389,11 @@ def gather_facts(
     titik = _dengan_retry(lambda: (
         supabase.from_("drop_points").select("nama, aktif").execute().data or []
     ))
+    # Hanya agregat yang dipakai. `keterangan` sengaja TIDAK diambil: isinya
+    # catatan bebas yang bisa memuat nama orang, dan tidak boleh ikut ke AI.
+    pengeluaran = _dengan_retry(lambda: (
+        supabase.from_("expenses").select("kategori, jumlah, tanggal").execute().data or []
+    ))
 
     harga_by_id = {s["id"]: s for s in sepatu}
     nama_teknisi = {t["id"]: t["full_name"] for t in teknisi}
@@ -466,6 +507,35 @@ def gather_facts(
     omzet_periode = _omzet(dalam_periode)
     komisi_periode = sum(r.get("tech_commission") or 0 for r in dalam_periode)
 
+    # ---------- pengeluaran operasional dalam periode ----------
+    # Kolom tanggal bertipe DATE; batas periode dikonversi ke date supaya
+    # perbandingannya apel-ke-apel. `selesai` eksklusif, sama dengan selesai_at.
+    def _tgl_exp(mentah: Any) -> Optional[date]:
+        try:
+            return date.fromisoformat(str(mentah)[:10])
+        except (TypeError, ValueError):
+            return None
+
+    mulai_d = mulai.date() if mulai else None
+    selesai_d = selesai.date() if selesai else None
+    exp_periode: list[dict] = []
+    for r in pengeluaran:
+        d = _tgl_exp(r.get("tanggal"))
+        if d is None:
+            continue
+        if mulai_d and d < mulai_d:
+            continue
+        if selesai_d and d >= selesai_d:
+            continue
+        exp_periode.append(r)
+
+    total_pengeluaran = sum(r.get("jumlah") or 0 for r in exp_periode)
+    per_kategori: dict[str, int] = {}
+    for r in exp_periode:
+        kat = r.get("kategori") or "lainnya"
+        per_kategori[kat] = per_kategori.get(kat, 0) + (r.get("jumlah") or 0)
+    kategori_terurut = sorted(per_kategori.items(), key=lambda x: x[1], reverse=True)
+
     return {
         "dihitung_pada": now.isoformat(),
         "periode": {
@@ -480,6 +550,12 @@ def gather_facts(
         "omzet_periode": omzet_periode,
         "komisi_periode": komisi_periode,
         "laba_outlet_periode": omzet_periode - komisi_periode,
+        # Pengeluaran operasional + sisa sesudahnya ("profit bersih" sederhana).
+        "pengeluaran_periode": total_pengeluaran,
+        "pengeluaran_per_kategori": [
+            {"kategori": k, "jumlah": j} for k, j in kategori_terurut
+        ],
+        "laba_bersih_periode": omzet_periode - komisi_periode - total_pengeluaran,
         "total_transaksi": len(transaksi),
         "omzet_total": _omzet(transaksi),
         "grafik": grafik,
@@ -574,6 +650,11 @@ def rule_based_summary(f: dict[str, Any]) -> str:
             f"{_ribuan(f['komisi_periode'])} dan sisa untuk outlet "
             f"{_ribuan(f['laba_outlet_periode'])}."
         )
+        if f.get("pengeluaran_periode"):
+            skel += (
+                f" Pengeluaran operasional tercatat {_ribuan(f['pengeluaran_periode'])}, "
+                f"sehingga sisa bersihnya {_ribuan(f['laba_bersih_periode'])}."
+            )
 
     growth = f.get("perubahan_omzet_persen")
     if growth is None:
@@ -769,15 +850,19 @@ Balas HANYA dengan JSON valid, tanpa teks lain, dengan bentuk persis:
 
 
 def openrouter_insight(
-    facts: dict[str, Any], api_key: str, model: str
+    facts: dict[str, Any],
+    api_key: str,
+    model: str,
+    timeout: float = TIMEOUT_DETIK,
 ) -> Optional[tuple[str, list[str]]]:
     """
     Panggil OpenRouter untuk (ringkasan, saran).
 
     Kembalikan None kalau gagal dalam bentuk apa pun -- biarkan
-    `rule_based_*` yang pakai. Tidak ada retries: kalau model gratis sedang
-    lambat, menunggu 45 detik untuk setiap pembukaan dashboard adalah
-    pengalaman yang buruk.
+    `rule_based_*` yang pakai. Tidak ada retries ke model yang sama: kalau
+    model gratis sedang lambat, menunggu 45 detik untuk setiap pembukaan
+    dashboard adalah pengalaman yang buruk. `timeout` diturunkan pemanggil
+    saat ada beberapa model cadangan supaya total tunggu tetap terkendali.
     """
     if not api_key:
         return None
@@ -824,7 +909,7 @@ def openrouter_insight(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_DETIK) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             hasil = json.loads(resp.read().decode("utf-8"))
         teks = hasil["choices"][0]["message"]["content"] or ""
         teks = _buang_pemikiran(teks)
@@ -918,24 +1003,30 @@ def build_summary(
     )
 
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    model = os.getenv("OPENROUTER_MODEL", "").strip() or DEFAULT_MODEL
+    models = _daftar_model()
 
     if api_key:
-        hasil = openrouter_insight(facts, api_key, model)
-        if hasil:
-            ringkasan, saran = hasil
-            return {
-                "ringkasan": ringkasan,
-                "saran": saran,
-                "sumber": "ai",
-                "model": model,
-                "catatan": None,
-                "fakta": facts,
-            }
+        # Coba model satu per satu: kalau yang pertama kena 429/404/timeout,
+        # lanjut ke cadangan berikutnya sebelum menyerah ke rule-based.
+        # Total tunggu dijaga ~TIMEOUT_DETIK: makin banyak cadangan, makin
+        # pendek jatah tiap model (minimal 12 detik supaya tidak mustahil).
+        per_model = max(12.0, TIMEOUT_DETIK / max(1, len(models)))
+        for model in models:
+            hasil = openrouter_insight(facts, api_key, model, timeout=per_model)
+            if hasil:
+                ringkasan, saran = hasil
+                return {
+                    "ringkasan": ringkasan,
+                    "saran": saran,
+                    "sumber": "ai",
+                    "model": model,
+                    "catatan": None,
+                    "fakta": facts,
+                }
         alasan = (
-            "Layanan AI sedang tidak tersedia (kuota model gratis habis, timeout, "
-            "atau API key ditolak). Ringkasan dan saran di bawah dihitung dari "
-            "data langsung."
+            f"Layanan AI sedang tidak tersedia (semua model dalam daftar gagal: "
+            f"{', '.join(models)} -- kuota habis, timeout, atau API key ditolak). "
+            "Ringkasan dan saran di bawah dihitung dari data langsung."
         )
     else:
         alasan = (

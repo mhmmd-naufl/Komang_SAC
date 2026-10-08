@@ -22,6 +22,8 @@ from fastapi.routing import APIRoute  # noqa: E402
 PUBLIK = {
     ("GET", "/"),
     ("GET", "/health"),
+    # Info bisnis & metode bayar untuk halaman depan; tidak ada data sensitif
+    ("GET", "/api/config"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/register"),
     # Katalog harga & lokasi mitra memang ditampilkan di halaman depan
@@ -31,6 +33,8 @@ PUBLIK = {
     ("GET", "/api/drop-points/{dp_id}"),
     # Cek status pakai kode booking, TANPA login (itu fiturnya)
     ("GET", "/api/transaksi/tracking/{kode}"),
+    # Pasangan lain dalam booking multi-pasang; data minimal (kode+status+layanan)
+    ("GET", "/api/transaksi/grup/{grup_id}"),
 }
 
 

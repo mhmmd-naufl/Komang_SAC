@@ -2,7 +2,7 @@ import os
 import secrets
 import hmac
 import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, status, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -139,6 +139,10 @@ class ShoeBase(BaseModel):
     kelompok: Optional[str] = Field(None, pattern=POLA_KELOMPOK)
     jenis_treatment: Optional[str] = Field(None, pattern=POLA_TREATMENT)
     keterangan_treatment: Optional[str] = None
+    # Estimasi pengerjaan (hari kalender). NULL = frontend memakai default.
+    # Per layanan, karena Repaint seminggu tidak boleh dijanjikan 2 hari
+    # seperti Deep Cleaning.
+    estimasi_hari: Optional[int] = Field(None, ge=1, le=60)
     status: bool = True
 
     @model_validator(mode="after")
@@ -167,6 +171,7 @@ class ShoeUpdate(BaseModel):
     kelompok: Optional[str] = Field(None, pattern=POLA_KELOMPOK)
     jenis_treatment: Optional[str] = Field(None, pattern=POLA_TREATMENT)
     keterangan_treatment: Optional[str] = None
+    estimasi_hari: Optional[int] = Field(None, ge=1, le=60)
     status: Optional[bool] = None
 
     @model_validator(mode="after")
@@ -195,6 +200,13 @@ class TransactionBase(BaseModel):
     drop_point_id: Optional[str] = None
     harga: Optional[int] = None
     catatan_konsumen: Optional[str] = None
+    # Metode bayar pilihan konsumen saat booking (tunai/transfer/qris).
+    # Divalidasi terhadap ACCEPTED_PAYMENTS saat create.
+    payment_method: Optional[str] = None
+    # "Benang" untuk booking multi-pasang: beberapa transaksi yang dibuat
+    # dalam satu sesi booking berbagi grup_id yang sama. NULL untuk booking
+    # tunggal. Dibuat frontend per batch submit.
+    grup_id: Optional[str] = None
 
 class TransactionCreate(TransactionBase):
     pass
@@ -230,6 +242,9 @@ class ShoeBrief(BaseModel):
     keterangan_treatment: Optional[str] = None
     harga_min: Optional[int] = None
     harga_max: Optional[int] = None
+    # Ikut ke tracking publik supaya konsumen melihat estimasi yang sesuai
+    # layanannya, bukan angka hardcode.
+    estimasi_hari: Optional[int] = None
 
 
 class StaffBrief(BaseModel):
@@ -353,6 +368,31 @@ class StockResponse(StockBase):
         from_attributes = True
 
 
+# --- Expenses (pengeluaran operasional: listrik, PDAM, dll.) ---
+class ExpenseBase(BaseModel):
+    kategori: str = Field(..., min_length=2, max_length=40)
+    jumlah: int = Field(..., gt=0, description="Rupiah, harus > 0")
+    tanggal: Optional[str] = None  # YYYY-MM-DD; default hari ini (WIB)
+    keterangan: Optional[str] = Field(None, max_length=200)
+
+class ExpenseCreate(ExpenseBase):
+    pass
+
+class ExpenseUpdate(BaseModel):
+    kategori: Optional[str] = Field(None, min_length=2, max_length=40)
+    jumlah: Optional[int] = Field(None, gt=0)
+    tanggal: Optional[str] = None
+    keterangan: Optional[str] = Field(None, max_length=200)
+
+class ExpenseResponse(ExpenseBase):
+    id: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 # --- Auth ---
 class LoginRequest(BaseModel):
     phone: str
@@ -408,6 +448,10 @@ class StatsResponse(BaseModel):
     masih_jalan: int = 0
     total_komisi: int = 0
     sisa_untuk_outlet: int = 0
+    # Pengeluaran operasional (listrik, PDAM, dll.) di periode yang sama,
+    # dan sisa setelah dikurangi keduanya -- "profit bersih" versi sederhana.
+    total_pengeluaran: int = 0
+    sisa_bersih: int = 0
     periode: PeriodeInfo
 
 
@@ -548,7 +592,7 @@ def _siapkan_transaksi(baris: list[dict], user: dict) -> list[dict]:
 # endpoint lain -- dulu kindalah teknis untuk memakai kolom baru, dan itu mudah
 # terlewat karena PostgREST diam-diam mengembalikan null untuk kolom yang
 # tidak disebut.
-_KOLOM_SHOE = "id, merk, model, kelompok, jenis_treatment, keterangan_treatment, harga_min, harga_max"
+_KOLOM_SHOE = "id, merk, model, kelompok, jenis_treatment, keterangan_treatment, harga_min, harga_max, estimasi_hari"
 
 
 # ==========================================
@@ -912,13 +956,76 @@ def _kelompok_bersih(kelompok: Optional[str]) -> Optional[str]:
     return bersih
 
 
+def _kategori_bersih(kategori: Optional[str]) -> Optional[str]:
+    """
+    Normalisasi kategori pengeluaran: trim + rapikan spasi + lowercase.
+
+    Tanpa lowercase, "Listrik" dan "listrik" jadi dua kategori berbeda dan
+    rekap mingguan terpecah. Spasi berlebih juga dirapikan supaya "biaya  air"
+    tidak lolos sebagai kategori baru.
+    """
+    if kategori is None:
+        return None
+    bersih = " ".join(kategori.strip().lower().split())
+    if not bersih:
+        return None
+    if len(bersih) > 40:  # sama dengan batas CHECK constraint di database
+        raise HTTPException(400, "Nama kategori terlalu panjang (maks 40 karakter)")
+    if not all(ch.isalnum() or ch in " &/.,()-" for ch in bersih):
+        raise HTTPException(400, "Nama kategori tidak valid")
+    return bersih
+
+
+def _tanggal_bersih(tanggal: Optional[str], wajib: bool = False) -> Optional[str]:
+    """
+    Validasi tanggal pengeluaran (YYYY-MM-DD). Tanggal di masa depan ditolak:
+    hampir pasti salah ketik, dan merusak rekap mingguan.
+    """
+    if tanggal is None or not str(tanggal).strip():
+        if wajib:
+            raise HTTPException(400, "Tanggal tidak valid")
+        return None
+    try:
+        d = date.fromisoformat(str(tanggal).strip()[:10])
+    except ValueError:
+        raise HTTPException(400, "Format tanggal harus YYYY-MM-DD")
+    if d > datetime.now(ZONA_WIB).date():
+        raise HTTPException(400, "Tanggal pengeluaran tidak boleh di masa depan")
+    return d.isoformat()
+
+
 # ==========================================
 # ROOT & HEALTH
 # ==========================================
 
+# Metode bayar yang diterima outlet, dari .env ACCEPTED_PAYMENTS. Alias umum
+# dipetakan supaya "qr" dan "qris" tidak jadi dua nilai berbeda diam-diam.
+_ALIAS_BAYAR = {"qr": "qris", "cash": "tunai", "transfer bank": "transfer"}
+ACCEPTED_PAYMENTS = sorted({
+    _ALIAS_BAYAR.get(p, p)
+    for p in (x.strip().lower() for x in os.getenv("ACCEPTED_PAYMENTS", "tunai").split(","))
+    if p
+})
+
 @app.get("/", tags=["Root"])
 def read_root():
     return {"message": "Selamat datang di Komang SAC API", "status": "aktif", "version": "0.1.0"}
+
+@app.get("/api/config", tags=["Config"])
+def public_config():
+    """
+    Konfigurasi publik untuk frontend: info bisnis dan metode bayar.
+
+    Tanpa endpoint ini, nomor WA admin dan daftar metode bayar di-hardcode di
+    beberapa komponen frontend -- dan sempat tidak sinkron dengan .env
+    (UI menampilkan 3 metode padahal .env hanya mengizinkan 2).
+    """
+    return {
+        "business_name": os.getenv("BUSINESS_NAME", "Komang SAC"),
+        "business_phone": os.getenv("BUSINESS_PHONE", ""),
+        "business_hours": os.getenv("BUSINESS_HOURS", "09.00-20.00 WIB"),
+        "accepted_payments": ACCEPTED_PAYMENTS,
+    }
 
 @app.get("/health", tags=["Health"])
 def health_check():
@@ -1102,6 +1209,17 @@ def admin_stats(
     # bukan `data`.
     masih_jalan = belum.count or 0
 
+    # Pengeluaran operasional di periode yang sama. Kolomnya DATE, jadi
+    # dibandingkan sebagai tanggal: `mulai` inklusif, `selesai` eksklusif --
+    # sama persis dengan konvensi selesai_at supaya tidak ada hari batas
+    # yang dihitung dua kali atau tidak sama sekali.
+    exp_query = supabase.from_("expenses").select("jumlah")
+    if p["mulai"]:
+        exp_query = exp_query.gte("tanggal", p["mulai"].date().isoformat())
+    if p["selesai"]:
+        exp_query = exp_query.lt("tanggal", p["selesai"].date().isoformat())
+    total_pengeluaran = sum(e.get("jumlah") or 0 for e in (exp_query.execute().data or []))
+
     # Legacy compatibility: transaksi yang statusnya sudah final tapi belum
     # punya `selesai_at` tetap harus dihitung sebagai pekerjaan selesai untuk
     # dashboard. Tanpa fallback ini, data riwayat tampak "hilang" meski sudah
@@ -1129,6 +1247,8 @@ def admin_stats(
         "masih_jalan": masih_jalan,
         "total_komisi": komisi_total,
         "sisa_untuk_outlet": pendapatan - komisi_total,
+        "total_pengeluaran": total_pengeluaran,
+        "sisa_bersih": pendapatan - komisi_total - total_pengeluaran,
         "periode": {
             "periode": p["periode"],
             "label": p["label"],
@@ -1290,7 +1410,6 @@ def analytics_summary(
 # CRUD SEPATU (SHOES) - Master Data & Price List
 # ==========================================
 
-@app.post("/api/sepatu", response_model=ShoeResponse, status_code=status.HTTP_201_CREATED, tags=["Sepatu"])
 def _rapikan_harga_master(data: dict, gabung: bool = False) -> dict:
     """
     Samakan `harga_cuci` dan `harga_min` supaya booking tidak pernah ambigu.
@@ -1474,6 +1593,30 @@ def create_transaksi(transaksi: TransactionCreate, user: dict = Depends(get_curr
     master = shoe.data[0]
     data["harga"] = master.get("harga_min") or master["harga_cuci"]
 
+    # Metode bayar: normalisasi alias lalu tolak yang tidak diterima outlet.
+    # Dulu pilihan ini hanya hiasan UI -- tidak dikirim ke backend sama sekali,
+    # jadi admin tidak pernah tahu konsumen mau bayar lewat apa.
+    pm = (data.get("payment_method") or "").strip().lower() or None
+    if pm:
+        pm = _ALIAS_BAYAR.get(pm, pm)
+        if ACCEPTED_PAYMENTS and pm not in ACCEPTED_PAYMENTS:
+            raise HTTPException(
+                400,
+                f"Metode pembayaran '{pm}' tidak diterima. Pilihan: {', '.join(ACCEPTED_PAYMENTS)}",
+            )
+    data["payment_method"] = pm
+
+    # grup_id: harus UUID valid kalau diisi. Frontend membuatnya per batch
+    # booking multi-pasang; nilai ngawur ditolak supaya kolom ini tetap
+    # bisa diandalkan untuk mengelompokkan.
+    if data.get("grup_id"):
+        try:
+            data["grup_id"] = str(uuid.UUID(str(data["grup_id"])))
+        except (ValueError, AttributeError):
+            raise HTTPException(400, "grup_id harus berupa UUID")
+    else:
+        data["grup_id"] = None
+
     data["status"] = "Diterima"
     data["tech_commission"] = calculate_commission(data["harga"])
     data["kode"] = generate_tracking_code()
@@ -1487,7 +1630,18 @@ def create_transaksi(transaksi: TransactionCreate, user: dict = Depends(get_curr
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Database error: {str(e)}")
+        # PGRST204 = kolom di payload belum ada di database (migrasi belum
+        # dijalankan). Terjemahkan jadi pesan yang bisa ditindaklanjuti --
+        # "Could not find the 'payment_method' column ... in the schema cache"
+        # mentah tidak memberi konsumen/admin tahu harus berbuat apa.
+        pesan = str(e)
+        if "PGRST204" in pesan or "schema cache" in pesan:
+            raise HTTPException(
+                503,
+                "Database belum dimigrasi (ada kolom baru yang belum dibuat). "
+                "Jalankan migrate.sql di Supabase SQL Editor, lalu coba lagi.",
+            )
+        raise HTTPException(500, f"Database error: {pesan}")
 
 def _bisa_lihat(user: dict, trx: dict) -> bool:
     """Cek apakah user berhak melihat transaksi ini."""
@@ -1512,6 +1666,7 @@ def list_transaksi(
     sampai: Optional[str] = None,
     dari_selesai: Optional[str] = None,
     sampai_selesai: Optional[str] = None,
+    grup_id: Optional[str] = None,
     urut: str = "terbaru",
     limit: Optional[int] = None,
     page: Optional[int] = None,
@@ -1570,6 +1725,10 @@ def list_transaksi(
             query = query.eq("drop_point_id", drop_point_id)
         if user_id:
             query = query.eq("user_id", user_id)
+        if grup_id:
+            # Booking multi-pasang: semua transaksi satu sesi. Scope peran di
+            # atas tetap berlaku, jadi konsumen hanya melihat grup miliknya.
+            query = query.eq("grup_id", grup_id)
         if cari:
             query = query.ilike("kode", f"%{cari}%")
         if dari:
@@ -1668,12 +1827,45 @@ def tracking_transaksi(kode: str):
         # cuciannya rampung, jadi sengaja ikut ke halaman publik.
         "selesai_at": trx.get("selesai_at"),
         "catatan_konsumen": trx.get("catatan_konsumen"),
+        "payment_method": trx.get("payment_method"),
+        # Ada untuk booking multi-pasang: halaman status memakainya untuk
+        # menampilkan pasangan lain dalam booking yang sama.
+        "grup_id": trx.get("grup_id"),
         "photo_before": trx.get("photo_before"),
         "photo_after": trx.get("photo_after"),
         "photo_defect": trx.get("photo_defect"),
         "shoes": trx.get("shoes"),
         "drop_point": trx.get("drop_points"),
     }
+
+
+@app.get("/api/transaksi/grup/{grup_id}", tags=["Transaksi"])
+def tracking_grup(grup_id: str):
+    """
+    Semua pasangan dalam satu booking multi-pasang (publik, data minimal).
+
+    Sengaja hanya kode + status + nama layanan: cukup untuk halaman status
+    menampilkan "booking ini berisi 3 pasang", tanpa membuka harga atau
+    data lain milik sesi booking orang.
+    """
+    try:
+        grup = str(uuid.UUID(grup_id))
+    except (ValueError, AttributeError):
+        raise HTTPException(400, "grup_id harus berupa UUID")
+
+    result = (
+        supabase.from_("transactions")
+        .select("kode, status, shoes(merk, model)")
+        .eq("grup_id", grup)
+        .order("created_at")
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(404, "Booking grup tidak ditemukan")
+    return [
+        {"kode": t.get("kode"), "status": t.get("status"), "shoes": t.get("shoes")}
+        for t in result.data
+    ]
 
 @app.put("/api/transaksi/{transaksi_id}/status", response_model=TransactionResponse, tags=["Transaksi"])
 def update_transaksi_status(
@@ -2291,5 +2483,155 @@ def kurangi_stock(stock_id: str, jumlah: int, _: dict = Depends(require_role("ad
         "jumlah": baru,
         "last_updated": get_now_iso()
     }).eq("id", stock_id).execute()
-    
+
     return result.data[0]
+
+
+# ==========================================
+# EXPENSES (PENGELUARAN OPERASIONAL)
+# ==========================================
+# Data finansial: semua endpoint di sini admin-only, konsisten dengan aturan
+# privasi harga/komisi -- teknisi dan drop point tidak perlu tahu pengeluaran.
+#
+# PENTING: /rekap-mingguan didefinisikan SEBELUM /{expense_id}. Kalau urutannya
+# terbalik, FastAPI menganggap "rekap-mingguan" sebuah id dan endpoint rekap
+# tidak pernah tercapai.
+
+@app.get("/api/expenses/rekap-mingguan", tags=["Expenses"])
+def rekap_mingguan_expenses(_: dict = Depends(require_role("admin"))):
+    """
+    Total pengeluaran per minggu (Senin-Minggu, zona WIB), 8 minggu terakhir.
+
+    Minggu dimulai Senin supaya rekap sejalan dengan pekan kerja outlet.
+    Ini jawaban atas pertanyaan rutin pemilik: "minggu ini habis berapa?"
+    """
+    sekarang = datetime.now(ZONA_WIB).date()
+    senin_ini = sekarang - timedelta(days=sekarang.weekday())
+    batas = senin_ini - timedelta(weeks=7)
+
+    baris = (
+        supabase.from_("expenses")
+        .select("kategori, jumlah, tanggal")
+        .gte("tanggal", batas.isoformat())
+        .execute().data or []
+    )
+
+    # Siapkan 8 slot minggu (termasuk yang kosong) supaya riwayat tidak
+    # melompat-lompat saat ada minggu tanpa pengeluaran.
+    slot: dict[str, dict] = {}
+    for i in range(8):
+        senin = batas + timedelta(weeks=i)
+        slot[senin.isoformat()] = {"senin": senin.isoformat(), "total": 0, "per_kategori": {}}
+
+    for r in baris:
+        try:
+            tgl = date.fromisoformat(str(r.get("tanggal"))[:10])
+        except ValueError:
+            continue
+        senin = tgl - timedelta(days=tgl.weekday())
+        sel = slot.get(senin.isoformat())
+        if sel is None:
+            continue  # di luar jendela 8 minggu (tanggal ganjil di data lama)
+        jumlah = r.get("jumlah") or 0
+        sel["total"] += jumlah
+        kat = r.get("kategori") or "lainnya"
+        sel["per_kategori"][kat] = sel["per_kategori"].get(kat, 0) + jumlah
+
+    return {
+        "minggu_ini": slot[senin_ini.isoformat()],
+        "riwayat": [slot[(batas + timedelta(weeks=i)).isoformat()] for i in range(8)],
+    }
+
+
+@app.post("/api/expenses", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED, tags=["Expenses"])
+def create_expense(item: ExpenseCreate, _: dict = Depends(require_role("admin"))):
+    kategori = _kategori_bersih(item.kategori)
+    if not kategori:
+        raise HTTPException(400, "Kategori wajib diisi")
+    data = {
+        "kategori": kategori,
+        "jumlah": item.jumlah,
+        # Default hari ini di zona WIB -- jangan NOW() dari server yang UTC,
+        # karena input lewat tengah malam WIB bisa masuk tanggal kemarin.
+        "tanggal": _tanggal_bersih(item.tanggal) or datetime.now(ZONA_WIB).date().isoformat(),
+        "keterangan": (item.keterangan or "").strip() or None,
+        "created_at": get_now_iso(),
+    }
+    result = supabase.from_("expenses").insert(data).execute()
+    if not result.data:
+        raise HTTPException(500, "Gagal mencatat pengeluaran")
+    return result.data[0]
+
+
+@app.get("/api/expenses", response_model=List[ExpenseResponse], tags=["Expenses"])
+def list_expenses(
+    response: Response,
+    _: dict = Depends(require_role("admin")),
+    kategori: Optional[str] = None,
+    dari: Optional[str] = None,
+    sampai: Optional[str] = None,
+    q: Optional[str] = None,
+    urut: str = "terbaru",
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
+):
+    """
+    Riwayat pengeluaran. Filter tanggal `dari`/`sampai` keduanya INKLUSIF
+    (kolomnya DATE, bukan timestamp -- batas eksklusif di sini justru
+    membuang pengeluaran tepat di tanggal `sampai`).
+    """
+    kat = _kategori_bersih(kategori)
+    tgl_dari = _tanggal_bersih(dari)
+    tgl_sampai = _tanggal_bersih(sampai)
+    cari = _cari_teks(q)
+
+    def bangun() -> object:
+        query = supabase.from_("expenses").select("*", count="exact")
+        if kat:
+            query = query.eq("kategori", kat)
+        if tgl_dari:
+            query = query.gte("tanggal", tgl_dari)
+        if tgl_sampai:
+            query = query.lte("tanggal", tgl_sampai)
+        if cari:
+            query = query.ilike("keterangan", f"%{cari}%")
+
+        if urut == "terlama":
+            return query.order("tanggal").order("created_at")
+        if urut == "nilai_tinggi":
+            return query.order("jumlah", desc=True)
+        if urut == "nilai_rendah":
+            return query.order("jumlah")
+        return query.order("tanggal", desc=True).order("created_at", desc=True)
+
+    if page is None:
+        return bangun().execute().data or []
+    return _halaman_berpaginan(bangun, page, per_page, response)
+
+
+@app.put("/api/expenses/{expense_id}", response_model=ExpenseResponse, tags=["Expenses"])
+def update_expense(expense_id: str, item: ExpenseUpdate, _: dict = Depends(require_role("admin"))):
+    data = item.model_dump(exclude_unset=True)
+    if "kategori" in data:
+        data["kategori"] = _kategori_bersih(data["kategori"])
+        if not data["kategori"]:
+            raise HTTPException(400, "Kategori wajib diisi")
+    if "tanggal" in data:
+        data["tanggal"] = _tanggal_bersih(data["tanggal"], wajib=True)
+    if "keterangan" in data:
+        data["keterangan"] = (data["keterangan"] or "").strip() or None
+    if not data:
+        raise HTTPException(400, "Tidak ada data yang diupdate")
+    result = supabase.from_("expenses").update(data).eq("id", expense_id).execute()
+    if not result.data:
+        raise HTTPException(404, "Catatan pengeluaran tidak ditemukan")
+    return result.data[0]
+
+
+@app.delete("/api/expenses/{expense_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Expenses"])
+def delete_expense(expense_id: str, _: dict = Depends(require_role("admin"))):
+    """Hapus catatan salah input. Hard delete: tidak ada tabel lain yang
+    mereferensikan expenses, jadi tidak ada risiko FK seperti pada sepatu."""
+    result = supabase.from_("expenses").delete().eq("id", expense_id).execute()
+    if not result.data:
+        raise HTTPException(404, "Catatan pengeluaran tidak ditemukan")
