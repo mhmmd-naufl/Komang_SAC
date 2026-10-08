@@ -46,6 +46,7 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
     drop_point_id: '',
     catatan: '',
     payment: 'tunai',
+    metode_pengantaran: '',
   })
 
   // Treatment sekarang dibaca dari layanan terpilih, bukan disimpan di state.
@@ -83,6 +84,7 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
     if (!shoeData?.id) next.shoe = 'Pilih layanan dulu dari katalog di halaman utama'
     if (!isAuthenticated) next.auth = 'Kamu harus masuk dulu untuk membuat booking'
     if (!formData.drop_point_id) next.drop_point_id = 'Pilih drop point'
+    if (!formData.metode_pengantaran) next.metode_pengantaran = 'Pilih metode pengantaran'
     setErrors(next)
     return Object.keys(next).length === 0
   }
@@ -107,9 +109,11 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
         // endpoint lain yang membaca payload ini apa adanya.
         harga: harga.jumlah,
         catatan_konsumen: formData.catatan || null,
+        metode_pengantaran: formData.metode_pengantaran || null,
       })
       setBookingCode(data.kode)
       setStep(3)
+      toast.success('Pesanan berhasil dibuat', `Nomor booking: ${data.kode}`)
       onSuccess?.()
     } catch (err) {
       toast.error('Booking gagal', err?.friendlyMessage || 'Terjadi kesalahan. Coba lagi.')
@@ -120,6 +124,20 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
   }
 
   const selectedDropPoint = dropPoints.find((dp) => dp.id === formData.drop_point_id)
+
+  // Antar-jemput hanya berlaku untuk Outlet Utama. Di drop point mitra,
+  // sepatu wajib diantar sendiri, jadi pilihan antar-jemput dikunci.
+  const isOutletUtama =
+    !!selectedDropPoint &&
+    (selectedDropPoint.id === 'fallback-outlet' ||
+      /outlet/i.test(selectedDropPoint.nama || ''))
+  const hanyaDropSendiri = formData.drop_point_id && !isOutletUtama
+
+  useEffect(() => {
+    if (hanyaDropSendiri && formData.metode_pengantaran !== 'drop_sendiri') {
+      setFormData((prev) => ({ ...prev, metode_pengantaran: 'drop_sendiri' }))
+    }
+  }, [hanyaDropSendiri, formData.metode_pengantaran])
 
   // Resolved di satu tempat supaya tampilan harga di langkah 1 dan langkah 2
   // tidak pernah berbeda untuk layanan yang sama.
@@ -283,6 +301,60 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
               </div>
 
               <div>
+                <span className="label">Metode Pengantaran *</span>
+                {hanyaDropSendiri ? (
+                  <>
+                    <p className="px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-700">
+                      Drop Sendiri
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Untuk drop point mitra, sepatu wajib diantar sendiri ke lokasi drop point.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { value: 'antar_jemput', label: 'Diantar-Jemput' },
+                        { value: 'drop_sendiri', label: 'Drop Sendiri' },
+                      ].map((m) => (
+                        <button
+                          key={m.value}
+                          type="button"
+                          onClick={() =>
+                            setFormData((prev) => ({ ...prev, metode_pengantaran: m.value }))
+                          }
+                          className={cn(
+                            'px-2 py-2.5 rounded-xl border text-xs font-medium transition-colors',
+                            formData.metode_pengantaran === m.value
+                              ? 'border-primary-600 bg-primary-50 text-primary-700'
+                              : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                          )}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                    {formData.metode_pengantaran === 'antar_jemput' && (
+                      <div className="mt-2 p-3 rounded-xl bg-primary-50 border border-primary-100 text-xs text-slate-600 space-y-1">
+                        <p>
+                          • Antar-jemput tersedia untuk lokasi dalam radius <strong>5 km</strong> dari
+                          Outlet Utama.
+                        </p>
+                        <p>
+                          • Di luar radius 5 km akan dikenakan <strong>biaya tambahan</strong> yang
+                          diinfokan melalui WhatsApp sebelum penjemputan.
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+                {errors.metode_pengantaran && (
+                  <p className="text-xs text-rose-600 mt-1">{errors.metode_pengantaran}</p>
+                )}
+              </div>
+
+              <div>
                 <span className="label">Jenis Treatment</span>
                 <p className="px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-700">
                   {treatment}
@@ -384,6 +456,14 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
                       <span className="font-medium text-right">{selectedDropPoint?.nama}</span>
                     </div>
                     <div className="flex justify-between gap-4">
+                      <span className="text-slate-500">Metode Pengantaran</span>
+                      <span className="font-medium text-right">
+                        {formData.metode_pengantaran === 'antar_jemput'
+                          ? 'Diantar-Jemput'
+                          : 'Drop Sendiri'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-4">
                       <span className="text-slate-500">Pembayaran</span>
                       <span className="font-medium text-right">
                         {PAYMENTS.find((p) => p.value === formData.payment)?.label}
@@ -415,6 +495,12 @@ export default function BookingModal({ shoe, onClose, onSuccess }) {
                     )}
                     <li>• Teknisi wajib foto kondisi sebelum & sesudah.</li>
                     <li>• Simpan nomor booking untuk memantau progres.</li>
+                    {formData.metode_pengantaran === 'antar_jemput' && (
+                      <li>
+                        • Antar-jemput gratis dalam radius 5 km dari Outlet Utama. Di luar radius,
+                        biaya tambahan akan diinfokan lewat WhatsApp.
+                      </li>
+                    )}
                   </ul>
                 </div>
               </div>
