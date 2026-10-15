@@ -61,7 +61,7 @@ cp .env.example .env
 python bootstrap_admin.py
 
 # 7. Jalankan
-uvicorn main:app --reload
+uvicorn main:app --reload --port 8001
 ```
 
 ### Frontend (React)
@@ -86,11 +86,16 @@ npm run dev
 
 ## 4. Akun Default
 
-| Peran | Nomor WhatsApp | Password |
-|-------|----------------|----------|
-| **Admin** | `628980570911` | `password123` |
-| **Teknisi** | `628991000001` | `password123` |
-| **Konsumen** | `628981000001` | `password123` |
+Akun demo dibuat oleh `seed_dummy.py`. Nomor HP dan password awal ikut tertulis
+di file itu -- **jangan disalin ke dokumen publik**, karena daftar kredensial
+ini pernah bocor sampai ke repo publik.
+
+Cek daftar akun dan reset password:
+
+```bash
+python manage_users.py list
+python manage_users.py reset <no-hp> "PasswordBaru"
+```
 
 > **PENTING:** Ganti password admin sebelum dipakai sungguhan!
 
@@ -165,7 +170,7 @@ ACCEPTED_PAYMENTS=tunai,transfer,qris
 ### Frontend (frontend/.env)
 
 ```ini
-VITE_API_BASE_URL=http://localhost:8000
+VITE_API_BASE_URL=http://localhost:8001
 VITE_SUPABASE_URL=https://xxxx.supabase.co
 VITE_SUPABASE_ANON_KEY=...
 ```

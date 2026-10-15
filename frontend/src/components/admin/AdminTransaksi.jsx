@@ -57,12 +57,16 @@ export function tautanWa(nomor, pesan) {
 }
 
 /**
- * Satu pesan WhatsApp yang berisi pemberitahuan status SEKALIGUS invoice.
+ * Satu pesan WhatsApp yang berisi pemberitahuan "sudah siap diambil" SEKALIGUS
+ * invoice. Ini satu-satunya jalur invoice ke pelanggan.
  *
- * Sengaja digabung: pelanggan yang diberi tahu "sudah siap diambil" hampir
- * selalu perlu langsung tahu berapa yang harus dibayar, dan kalau dikirim dua
- * pesan terpisah yang kedua sering tidak terbaca. Format teks polos (bukan PDF)
- * supaya bisa langsung ditempel dan dibaca di HP apa pun tanpa layanan tambahan.
+ * Halaman konsumen sengaja tidak punya tombol cetak/unduh invoice: panel
+ * admin yang-trigger saat status sudah "Siap diambil", supaya tidak ada dua
+ * versi invoice yang berbeda (satu dicetak pelanggan, satu dikirim admin) dan
+ * pelanggan tidak bisa punya nota sebelum harga-nya benar.
+ *
+ * Format teks polos (bukan PDF) supaya bisa langsung ditempel dan dibaca di HP
+ * apa pun tanpa layanan tambahan.
  */
 export function pesanWa(t) {
   const nama = t.customer?.full_name?.trim() || ''
@@ -72,16 +76,28 @@ export function pesanWa(t) {
   return [
     `Halo${nama ? ` ${nama}` : ''},`,
     '',
-    `Pesanan *${t.kode || '-'}* berstatus *${t.status}*.`,
+    `Pesanan *${t.kode || '-'}* sudah siap diambil.`,
     '',
     '*Invoice*',
     `Layanan: ${layanan}`,
     `Harga: ${formatRupiah(t.harga)}`,
     ...(metode ? [`Pembayaran: ${metode.toUpperCase()}`] : []),
-    ...(t.status === 'Siap diambil' ? ['', 'Silakan ambil di outlet pada jam buka.'] : []),
+    '',
+    'Silakan ambil di outlet pada jam buka.',
     '',
     'Terima kasih sudah mempercayakan sepatunya ke Komang SAC 🙏',
   ].join('\n')
+}
+
+/**
+ * Invoice hanya boleh dikirim saat barang sudah siap diambil.
+ *
+ * Fungsi ini satu-satunya penentu tombolnya, dipakai bersama oleh daftar dan
+ * modal detail -- supaya tidak mungkin tombolnya muncul di tabel tapi tidak
+ * di modal (atau sebaliknya).
+ */
+export function bisaKirimInvoice(t) {
+  return t?.status === 'Siap diambil' && Boolean(t?.customer?.phone)
 }
 
 export default function AdminTransaksi() {
@@ -277,13 +293,13 @@ export default function AdminTransaksi() {
                 </td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex items-center justify-end gap-1">
-                    {t.customer?.phone && (
+                    {bisaKirimInvoice(t) && (
                       <a
                         href={tautanWa(t.customer.phone, pesanWa(t))}
                         target="_blank"
                         rel="noreferrer"
                         className="p-2 rounded-lg text-slate-400 hover:bg-emerald-50 hover:text-emerald-600"
-                        title="Kirim status + invoice via WhatsApp"
+                        title="Kirim invoice + pengingat siap diambil via WhatsApp"
                         aria-label={`Kirim WhatsApp invoice ${t.kode || ''}`}
                       >
                         <MessageCircle className="h-4 w-4" />
@@ -610,7 +626,8 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
   if (!transaksi) return null
   const t = transaksi
   const cfg = getStatusConfig(t.status)
-  const wa = tautanWa(t.customer?.phone, pesanWa(t))
+  // Sama seperti di tabel: tombol hanya ada saat status sudah "Siap diambil".
+  const wa = bisaKirimInvoice(t) ? tautanWa(t.customer.phone, pesanWa(t)) : null
 
   return (
     <Modal
@@ -627,7 +644,7 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
           {wa && (
             <a href={wa} target="_blank" rel="noreferrer" className="btn-primary flex-1">
               <MessageCircle className="h-4 w-4" />
-              Kirim Invoice WhatsApp
+              Kirim Invoice + Pengingat Ambil
             </a>
           )}
         </div>
@@ -640,6 +657,18 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
             Diperbarui {t.updated_at ? formatDateTime(t.updated_at) : 'belum pernah'}
           </p>
         </div>
+
+        {/* Kenapa tombol invoice tidak ada. Tanpa ini admin bisa Centresaya
+            tombolnya hilang dan mengira ada bug. */}
+        {!wa && t.status !== 'Siap diambil' && (
+          <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-800">
+            <MessageSquare className="h-4 w-4 flex-shrink-0 mt-px" />
+            <p>
+                Invoice dikirim bareng pengingat &ldquo;siap diambil&rdquo;, jadi tombolnya baru
+              muncul setelah statusnya <strong>Siap diambil</strong>.
+            </p>
+          </div>
+        )}
 
         <div className="grid gap-5 sm:grid-cols-2">
           <div className="space-y-1">

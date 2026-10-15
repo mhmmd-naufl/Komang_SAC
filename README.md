@@ -91,7 +91,7 @@ pip install -r requirements.txt
 Kalau tidak ingin aktivasi tiap kali, panggil langsung:
 
 ```bash
-.venv\Scripts\python.exe uvicorn main:app --reload
+.venv\Scripts\python.exe uvicorn main:app --reload --port 8001
 ```
 
 ### 2. Siapkan database
@@ -179,7 +179,13 @@ dan tidak menimpa layanan yang sudah diubah manual dari panel admin.
 > **Wajib dijalankan setelah `migrate.sql`**, karena script ini butuh kolom
 > `harga_min`, `harga_max`, dan `kelompok` yang ditambahkan oleh migrasi.
 
-Password semua akun dummy: `password123`
+Nomor HP akun dummy ada di `seed_dummy.py` (baris `USERS`), dan password awal
+semuanya sama. Nilai password tidak ditulis ulang di sini supaya tidak ikut
+bocor ke repo publik — kalau lupa, jalankan:
+
+```bash
+python manage_users.py list
+```
 
 | Nomor | Peran |
 |---|---|
@@ -196,45 +202,42 @@ python seed_dummy.py --reset
 ### 5. Akun dan password
 
 Password **tidak bisa dibaca balik** dari database — tersimpan sebagai hash
-PBKDF2-SHA256. Yang penting saat login adalah password yang **sama** dengan
-yang di-hash, jadi untuk testing cukup pakai akun di bawah:
+PBKDF2-SHA256.
 
-| Peran | Nomor WhatsApp | Password |
-|---|---|---|
-| Admin | `628980570911` | `password123` |
-| Teknisi | `628991000001` | `password123` |
-| Teknisi | `628991000002` | `password123` |
-| Teknisi | `628991000003` | `password123` |
-| Drop point | `628991000004` | `password123` |
-| Konsumen | `628981000001` | `password123` |
-| Konsumen | `628981000002` | `password123` |
-| Konsumen | `628981000003` | `password123` |
-| Konsumen | `628981000004` | `password123` |
-| Konsumen | `628981000005` | `password123` |
+Data akun demo dibuat oleh `seed_dummy.py`. Nomor HP dan password awal ikut
+tertulis di file itu -- **jangan disalin ke dokumen publik**, karena daftar
+kredensial ini pernah bocor sampai ke repo publik. Kalau butuh daftar akun
+untuk login, cek langsung di database:
+
+```bash
+python manage_users.py list
+```
+
+Reset password kapan saja:
+
+```bash
+python manage_users.py reset 628980570911 "PasswordKuat123"
+```
 
 Di halaman `/login` saat `npm run dev`, ada blok **"Akun demo"** — klik salah
 satu untuk mengisi nomor dan password otomatis. Blok itu dibungkus
 `import.meta.env.DEV`, jadi **hilang total di build produksi** (sudah
 diverifikasi: string kredensial tidak ada di dalam `dist/`).
 
-Lihat semua akun dan reset password kapan saja:
-
-```bash
-python manage_users.py                          # daftar semua akun
-python manage_users.py list technician          # filter per role
-python manage_users.py reset 628980570911 "PasswordKuat123"
-```
-
 > Ganti password admin sebelum sistem dipakai sungguhan.
 
 ### 6. Jalankan backend
 
 ```bash
-uvicorn main:app --reload
+uvicorn main:app --reload --port 8001
 ```
 
-Cek `http://127.0.0.1:8000/health` — harus balas Supabase `terkoneksi`.
-Dokumentasi interaktif: `http://127.0.0.1:8000/docs`
+Cek `http://127.0.0.1:8001/health` — harus balas Supabase `terkoneksi`.
+Dokumentasi interaktif: `http://127.0.0.1:8001/docs`
+
+> **Kenapa port 8001?** Port 8000 dipakai aplikasi lain (VibeSift) di mesin
+> yang sama. Kalau dua backend merebut satu port, frontend diam-diam memakai
+> API yang salah dan gejalanya muncul sebagai "Not Found" yang menyesatkan.
 
 ### 7. Jalankan frontend
 
