@@ -613,6 +613,94 @@ menulis apa pun.
 
 ---
 
+## Rate Limiting (anti brute-force)
+
+Backend memakai [`slowapi`](https://github.com/laurents/slowapi) dengan storage
+in-memory. Tidak butuh Redis, tidak ada layanan tambahan, tetap gratis.
+
+| Endpoint | Batas | Alasan |
+|---|---|---|
+| `POST /api/auth/login` | 5/menit | Membatasi menebak password |
+| `POST /api/auth/register` | 3/jam | Mencegah pendaftaran massal |
+| `POST /api/auth/set-password` | 5/menit | Melindungi akun yang sudah login |
+| `GET /api/transaksi/tracking/{kode}` | 30/menit | Mencegah pembrute-force kode booking |
+| `POST /api/transaksi` | 10/jam | Mencegah spam booking |
+| `POST /internal/cleanup-fotos` | 5/jam | Endpoint mesin, bukan untuk manusia |
+| *semua endpoint lain* | 300/menit | Jaring pengaman global |
+
+Saat kena limit, server membalas `429` dengan header `Retry-After` berisi
+detik yang tersisa, dan pesan dalam bahasa Indonesia.
+
+**Dua hal yang perlu diketahui:**
+
+1. **Batasnya per IP.** Kalau di belakang proxy (Railway/Vercel), kode membaca
+   `X-Forwarded-For` lebih dulu. Tanpa itu semua pengunjung dihitung sebagai
+   satu orang dan saling memblokir.
+2. **In-memory artinya reset saat server restart** dan tidak dibagi antar
+   worker. Untuk deployment sekarang (satu proses, free tier) ini sudah cukup.
+   Kalau nanti menambah worker, cukup ganti `storage_uri="memory://"` jadi
+   `storage_uri="redis://..."` di `main.py` — kode endpoint tidak berubah.
+
+> Rate limit dihitung dari IP, jadi kalau kamu menguji login 6 kali berturut-turut
+> dari komputer yang sama, percobaan keenam akan ditolak selama satu menit.
+> Itu memang perilaku yang diinginkan, bukan bug.
+
+---
+
+## Hapus Foto Otomatis (Storage TTL)
+
+Foto sepatu (`photo_before` / `photo_after` / `photo_defect`) disimpan di
+Supabase Storage dengan kuota **1 GB**. Supabase free tier **tidak punya**
+fitur hapus-otomatis, jadi penghapusannya dijalankan dari luar:
+
+```
+GitHub Actions (tiap hari 10.17 WIB)
+        │
+        ▼
+POST /internal/cleanup-fotos        ← dilindungi header X-Cleanup-Token
+        │
+        ├─ cari transaksi yang updated_at sudah lebih dari PHOTO_TTL_DAYS
+        ├─ hapus file-nya dari Supabase Storage
+        └─ kosongkan kolom foto di database
+```
+
+Retensi diatur lewat `PHOTO_TTL_DAYS` di `.env` (default **7 hari**).
+
+**Yang perlu diisi supaya fitur ini hidup:**
+
+1. `CLEANUP_TOKEN` di `.env` backend — buat dengan
+   `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+2. Dua secret di GitHub (**Settings → Secrets and variables → Actions**):
+
+   | Secret | Isi |
+   |---|---|
+   | `BACKEND_URL` | URL produksi backend, tanpa slash di belakang |
+   | `CLEANUP_TOKEN` | nilai yang sama dengan di `.env` backend |
+
+Kalau secret belum diisi, workflow tidak berwarna merah — hanya melewatkan
+tugasnya dengan peringatan kuning.
+
+**Dua hal penting soal cara kerjanya:**
+
+- Retensi dihitung dari `updated_at`, **bukan** dari waktu foto diupload.
+  Begitu ada aktivitas pada transaksi (status diganti, harga diedit), hitungan
+  mundurnya mulai dari nol. Konsekuensinya foto bisa bertahan **lebih** dari
+  7 hari — dan itu memang disengaja, supaya foto tidak hilang di tengah masa
+  komplain pelanggan.
+- Kolom database dikosongkan **hanya setelah** file benar-benar terhapus dari
+  Storage. Kalau penghapusan gagal, kolom tetap ada sehingga tidak ada file
+  yatim yang masih memakan kuota tapi tidak punya catatan di database.
+
+Uji manual: buka **Actions → Cleanup Foto (TTL) → Run workflow**, atau panggil
+langsung:
+
+```bash
+curl -X POST http://localhost:8001/internal/cleanup-fotos \
+  -H "X-Cleanup-Token: <isi CLEANUP_TOKEN kamu>"
+```
+
+---
+
 ## Sebelum Deploy
 
 - [ ] Jalankan `migrate.sql` di Supabase (termasuk kolom `selesai_at`)
@@ -620,6 +708,8 @@ menulis apa pun.
 - [ ] Ganti `JWT_SECRET_KEY` di `.env`
 - [ ] Ganti password admin bawaan — `python manage_users.py reset 628980570911 "..."`
 - [ ] Tambahkan secret CI di GitHub (kalau mau uji database jalan di Actions)
+- [ ] Isi `CLEANUP_TOKEN` di `.env` backend, lalu tambahkan secret `BACKEND_URL`
+      dan `CLEANUP_TOKEN` di GitHub Actions supaya foto auto-hapus jalan
 - [ ] **Aktifkan RLS** di Supabase (lihat catatan di `schema.sql`) — anon key sekarang
       masih bisa membaca semua tabel
 - [ ] Set `VITE_API_BASE_URL` untuk Vercel

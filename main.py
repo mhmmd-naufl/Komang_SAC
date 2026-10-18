@@ -4,9 +4,13 @@ import hmac
 import hashlib
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, status, Depends, Response
+from fastapi import FastAPI, HTTPException, status, Depends, Response, Request, Header
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+import limits
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List, Callable
 from supabase import create_client, Client
@@ -77,6 +81,109 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1008
 supabase: Client = create_client(SUPABASE_URL, get_supabase_key())
 
 app = FastAPI(title="Komang SAC API", version="0.1.0")
+
+# ==========================================
+# RATE LIMITING (anti brute-force)
+# ==========================================
+def _ip_pelanggan(request: Request) -> str:
+    """IP asli pengunjung, bukan IP proxy-nya.
+
+    Di balik proxy (Railway / Vercel / nginx), request.client.host selalu
+    mengembalikan IP proxy. Kalau dipakai apa adanya, SEMUA pengunjung
+    dihitung sebagai satu orang -- satu orang spam membuat semua orang
+    kena 429. Karena itu X-Forwarded-For (yang diisi proxy) didahulukan.
+
+    Header itu bisa dipalsukan kalau langsung diakses tanpa proxy, jadi
+    fallback-nya tetap request.client.host. Untuk kasus di belakang proxy
+    (deploy produksi) hasilnya sudah benar.
+
+    Kenapa per-IP: yang perlu dibatasi adalah pemilik IP, bukan user login.
+    Pelaku brute-force password tidak punya token, jadi satu-satunya
+    pengenal yang tersedia adalah alamat IP.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        # X-Forwarded-For bisa berisi rantai "klien, proksi1, proksi2".
+        # Yang paling kiri adalah pengirim asli.
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
+# CATATAN JUJUR soal storage_uri="memory://":
+#   Counter disimpan di memori proses Python. Artinya:
+#     1. Reset setiap server restart / redeploy.
+#     2. Tidak sharing antar worker -- kalau uvicorn dijalankan dengan
+#        --workers 4, tiap worker punya hitungan sendiri (limit jadi 4x).
+#   Untuk deployment sekarang (1 proses, free tier) ini sudah cukup dan
+#   tidak butuh Redis. Kalau nanti scale, cukup ganti baris ini jadi
+#   storage_uri="redis://..." -- kode endpoint tidak perlu diubah.
+#
+# RATE_LIMIT_ENABLED=false mematikan seluruh rate limit. Hanya untuk
+# pengujian (test_api.py memanggil login belasan kali dari IP yang sama,
+# pasti kena limit 5/menit). JANGAN pernah diset false di produksi.
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+#
+# default_limits = jaring pengaman global. Dipasang lewat middleware (lihat
+# di bawah), BUKAN lewat decorator -- supaya tidak perlu menambahkan
+# parameter `request: Request` ke ~60 endpoint yang ada. Endpoint yang
+# butuh batas lebih ketat diberi decorator @limiter.limit sendiri.
+limiter = Limiter(
+    key_func=_ip_pelanggan,
+    storage_uri="memory://",
+    default_limits=["300/minute"],
+    enabled=RATE_LIMIT_ENABLED,
+)
+app.state.limiter = limiter
+
+
+def _detik_coba_lagi(detail: Optional[str], default: int = 60) -> int:
+    """Detik sampai jendela rate limit terbuka lagi.
+
+    slowapi memberi `exc.detail` berupa string seperti "5 per 1 minute",
+    bukan angka. String itu bisa di-parse kembali oleh library `limits`
+    (sudah jadi dependensi slowapi) untuk mengambil durasi jendelanya.
+
+    Fallback-nya sengaja 60 detik: kalau format detail berubah di versi
+    slowapi mendatang, pesan tetap masuk akal daripada error 500.
+    """
+    if not detail:
+        return default
+    try:
+        return int(limits.parse_many(detail)[0].get_expiry())
+    except Exception:
+        return default
+
+
+def _pesan_rate_limit(request: Request, exc: RateLimitExceeded) -> Response:
+    """Balasan 429 dalam bahasa Indonesia + header yang berguna di client."""
+    detik = _detik_coba_lagi(exc.detail)
+    return JSONResponse(
+        status_code=429,
+        headers={
+            "Retry-After": str(detik),
+            "X-RateLimit-Limit": str(exc.detail or ""),
+        },
+        content={
+            "detail": (
+                f"Terlalu banyak permintaan. Coba lagi dalam {detik} detik. "
+                "Ini batas keamanan, bukan gangguan sistem."
+            )
+        },
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, _pesan_rate_limit)
+
+# Middleware inilah yang menerapkan default_limits (300/menit) ke semua
+# route tanpa perlu menyentuh signature tiap endpoint. Tanpa baris ini
+# default_limits diam-diam tidak dipakai sama sekali.
+from slowapi.middleware import SlowAPIMiddleware
+
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1042,7 +1149,8 @@ def health_check():
 # ==========================================
 
 @app.post("/api/auth/register", response_model=LoginResponse, status_code=status.HTTP_201_CREATED, tags=["Auth"])
-def register(payload: RegisterRequest):
+@limiter.limit("3/hour")
+def register(request: Request, payload: RegisterRequest):
     """Registrasi mandiri — selalu jadi role 'customer'."""
     return _create_user_with_password(
         full_name=payload.full_name.strip(),
@@ -1052,7 +1160,8 @@ def register(payload: RegisterRequest):
     )
 
 @app.post("/api/auth/login", response_model=LoginResponse, tags=["Auth"])
-def login(payload: LoginRequest):
+@limiter.limit("5/minute")
+def login(request: Request, payload: LoginRequest):
     phone = normalize_phone(payload.phone)
     result = supabase.from_("profiles").select("*").eq("phone", phone).execute()
     if not result.data:
@@ -1088,7 +1197,8 @@ def me(user: dict = Depends(get_current_user)):
     }
 
 @app.post("/api/auth/set-password", response_model=UserPublic, tags=["Auth"])
-def set_password(payload: PasswordSet, user: dict = Depends(get_current_user)):
+@limiter.limit("5/minute")
+def set_password(request: Request, payload: PasswordSet, user: dict = Depends(get_current_user)):
     """Set / ganti password untuk user yang sedang login."""
     supabase.from_("profiles").update(
         {"password_hash": hash_password(payload.password)}
@@ -1603,7 +1713,8 @@ def delete_sepatu(sepatu_id: str, _: dict = Depends(require_role("admin"))):
 # ==========================================
 
 @app.post("/api/transaksi", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED, tags=["Transaksi"])
-def create_transaksi(transaksi: TransactionCreate, user: dict = Depends(get_current_user)):
+@limiter.limit("10/hour")
+def create_transaksi(request: Request, transaksi: TransactionCreate, user: dict = Depends(get_current_user)):
     """
     Booking. Konsumen hanya boleh membuat atas namanya sendiri -- user_id
     diambil dari token, bukan dari payload, supaya tidak bisa memesan
@@ -1852,7 +1963,8 @@ def get_transaksi(transaksi_id: str, user: dict = Depends(get_current_user)):
     return _siapkan_transaksi([result.data[0]], user)[0]
 
 @app.get("/api/transaksi/tracking/{kode}", tags=["Transaksi"])
-def tracking_transaksi(kode: str):
+@limiter.limit("30/minute")
+def tracking_transaksi(request: Request, kode: str):
     """Cek status pakai nomor tracking (KS-XXXXXX) — dipakai halaman publik."""
     result = (
         supabase.from_("transactions")
@@ -2282,6 +2394,148 @@ async def upload_photo_defect(
     user: dict = Depends(get_current_user),
 ):
     return await upload_photo(transaksi_id, "defect", file, user)
+
+
+# ----------------------------------------------------------------
+# CLEANUP FOTO OTOMATIS (Storage TTL)
+# ----------------------------------------------------------------
+# Supabase free tier TIDAK punya fitur hapus-otomatis, jadi penghapusannya
+# dijalankan dari luar lewat GitHub Actions (lihat
+# .github/workflows/cleanup-photos.yml) yang memanggil endpoint ini tiap hari.
+#
+# Retensi dihitung dari `updated_at`, bukan dari waktu upload foto. Artinya
+# begitu ada aktivitas apa pun pada transaksi (status diganti, harga diedit),
+# hitungan mundurnya mulai dari nol lagi. Konsekuensinya foto bisa bertahan
+# LEBIH dari PHOTO_TTL_DAYS -- dan itu memang yang kita mau: foto jangan
+# sampai hilang di tengah masa komplain. Tidak ada kolom baru yang dibuat
+# hanya untuk fitur ini.
+CLEANUP_TOKEN = os.getenv("CLEANUP_TOKEN", "")
+PHOTO_TTL_DAYS = int(os.getenv("PHOTO_TTL_DAYS", "7"))
+
+# Batas aman per run, supaya satu kali panggilan tidak menembak batas
+# 1000 objek milik method `remove()` milik Supabase Storage.
+MAX_TRANSAKSI_PER_RUN = 500
+
+
+def _path_dari_url_public(url: str) -> Optional[str]:
+    """Ambil path objek dari URL publik Supabase Storage.
+
+    Format yang disimpan kolom foto:
+      https://<proj>.supabase.co/storage/v1/object/public/<bucket>/<path>
+
+    Yang dibutuhkan untuk menghapus hanya <path>-nya. URL lama yang tidak
+    cocok format ini mengembalikan None dan sengaja dilewati -- lebih baik
+    satu file tidak terhapus daripada path salah menghapus file orang lain.
+    """
+    if not url:
+        return None
+    penanda = f"/object/public/{PHOTO_BUCKET}/"
+    posisi = url.find(penanda)
+    if posisi == -1:
+        return None
+    path = url[posisi + len(penanda):]
+    # Path kosong atau berisi titik-slash berarti URL aneh -- jangan sentuh.
+    if not path or path.startswith("/") or ".." in path:
+        return None
+    return path
+
+
+@app.post("/internal/cleanup-fotos", tags=["Internal"])
+@limiter.limit("5/hour")
+def cleanup_fotos(request: Request, x_cleanup_token: Optional[str] = Header(default=None)):
+    """Hapus foto transaksi yang sudah melewati masa retensi.
+
+    Dipanggil cron GitHub Actions, bukan oleh user. Karena itu autentikasinya
+    BUKAN JWT (tidak ada user yang login), melainkan token statis lewat header
+    `X-Cleanup-Token` yang dibandingkan dengan env CLEANUP_TOKEN.
+
+    Pakai hmac.compare_digest, bukan ==: perbandingan biasa bisa membocorkan
+    panjang token lewat waktu respons (timing attack).
+    """
+    if not CLEANUP_TOKEN:
+        raise HTTPException(
+            503,
+            "CLEANUP_TOKEN belum diisi di .env backend. Isi dulu sebelum cron diaktifkan.",
+        )
+    if not x_cleanup_token or not hmac.compare_digest(x_cleanup_token, CLEANUP_TOKEN):
+        # Pesan sengaja umum: tidak membocorkan apakah token-nya salah
+        # format atau server-nya memang belum dikonfigurasi.
+        raise HTTPException(401, "Token cleanup tidak valid")
+
+    batas = (datetime.now(timezone.utc) - timedelta(days=PHOTO_TTL_DAYS)).isoformat()
+
+    # Kolom foto yang tidak NULL. Pakai atau_() karena satu transaksi bisa
+    # punya lebih dari satu jenis foto.
+    hasil = (
+        supabase.from_("transactions")
+        .select("id, kode, photo_before, photo_after, photo_defect")
+        .lte("updated_at", batas)
+        .or_(
+            "photo_before.not.is.null,"
+            "photo_after.not.is.null,"
+            "photo_defect.not.is.null"
+        )
+        .limit(MAX_TRANSAKSI_PER_RUN)
+        .execute()
+    )
+
+    rows = hasil.data or []
+    path_per_transaksi: dict[str, list[str]] = {}
+    kolom_per_transaksi: dict[str, list[str]] = {}
+
+    for row in rows:
+        paths: list[str] = []
+        kolom_terisi: list[str] = []
+        for kolom in ("photo_before", "photo_after", "photo_defect"):
+            path = _path_dari_url_public(row.get(kolom))
+            if path:
+                paths.append(path)
+                kolom_terisi.append(kolom)
+        if paths:
+            path_per_transaksi[row["id"]] = paths
+            kolom_per_transaksi[row["id"]] = kolom_terisi
+
+    semua_path = [p for paths in path_per_transaksi.values() for p in paths]
+
+    dihapus: list[str] = []
+    gagal: list[str] = []
+
+    # Batch per 500: batas riil Supabase adalah 1000 objek per panggilan.
+    for i in range(0, len(semua_path), 500):
+        batch = semua_path[i:i + 500]
+        try:
+            res = supabase.storage.from_(PHOTO_BUCKET).remove(batch)
+            # Supabase-py versi lama mengembalikan objek dengan .error,
+            # versi baru melempar exception. Keduanya ditangani.
+            if hasattr(res, "error") and res.error:
+                raise Exception(res.error.message)
+            dihapus.extend(batch)
+        except Exception as e:
+            gagal.extend(batch)
+            # Log kecil supaya kegagalan terlihat di output cron GitHub Actions.
+            print(f"[cleanup] gagal hapus batch {len(batch)} file: {e}")
+
+    # Kosongkan kolom hanya untuk transaksi yang file-nya benar-benar hilang
+    # dari storage. Kalau dihapus duluan kolomnya, file yang gagal dihapus
+    # jadi yatim: tidak ada jejak di database tapi masih makan kuota 1 GB.
+    path_dihapus = set(dihapus)
+    for transaksi_id, paths in path_per_transaksi.items():
+        if not any(p in path_dihapus for p in paths):
+            continue
+        try:
+            supabase.from_("transactions").update(
+                {kolom: None for kolom in kolom_per_transaksi[transaksi_id]}
+            ).eq("id", transaksi_id).execute()
+        except Exception as e:
+            print(f"[cleanup] gagal kosongkan kolom transaksi {transaksi_id}: {e}")
+
+    return {
+        "retensi_hari": PHOTO_TTL_DAYS,
+        "cutoff": batas,
+        "transaksi_diperiksa": len(rows),
+        "file_dihapus": len(dihapus),
+        "file_gagal": len(gagal),
+    }
 
 
 @app.post("/api/users", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED, tags=["Users"])

@@ -1,0 +1,67 @@
+name: Cleanup Foto (TTL)
+
+# Supabase free tier TIDAK punya fitur hapus-otomatis, jadi penghapusan foto
+# transaksi dijalankan dari sini: sekali sehari memanggil endpoint backend
+# /internal/cleanup-fotos yang menghapus file di Storage lalu mengosongkan
+# kolom foto di database.
+#
+# WAJIB diisi dulu di Settings > Secrets and variables > Actions:
+#   BACKEND_URL      contoh: https://komang-sac.up.railway.app (tanpa slash)
+#   CLEANUP_TOKEN    nilai yang sama dengan CLEANUP_TOKEN di .env backend
+#
+# CATATAN soal `if` di file ini:
+#   Konteks `secrets` TIDAK boleh dipakai di `if` tingkat job -- GitHub akan
+#   menolak seluruh file dengan "Unrecognized named-value: 'secrets'"
+#   (lihat actions/runner#520). Karena itu tidak ada `if` di level job.
+#   Pengecekan secrets dilakukan di dalam script step (bash), yang mana
+#   keluar dengan kode 0 dan pesan peringatan kalau secrets belum diisi --
+#   supaya repo tidak berwarna merah tiap hari sebelum dikonfigurasi.
+on:
+  schedule:
+    # 03.17 UTC = 10.17 WIB. Jam sengaja tidak bulat (bukan 03.00) supaya
+    # tidak berebut slot runner dengan ratusan workflow lain yang memakai
+    # cron tepat di awal jam.
+    - cron: '17 3 * * *'
+  workflow_dispatch: {} # tombol "Run workflow" untuk uji manual
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cleanup-photos
+  cancel-in-progress: false # jangan batalkan run yang sedang menghapus
+
+jobs:
+  cleanup:
+    name: Hapus foto lewat retensi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Panggil endpoint cleanup
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          CLEANUP_TOKEN: ${{ secrets.CLEANUP_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Keluar 0 (bukan gagal) kalau secrets belum diisi: ini bukan bug,
+          # hanya konfigurasi yang belum selesai.
+          if [ -z "${BACKEND_URL:-}" ] || [ -z "${CLEANUP_TOKEN:-}" ]; then
+            echo "::warning::BACKEND_URL / CLEANUP_TOKEN belum diisi di repo Secrets. Cleanup dilewati."
+            echo "Isi di Settings > Secrets and variables > Actions lalu jalankan ulang."
+            exit 0
+          fi
+
+          # Buang slash di belakang kalau ikut tertulis.
+          BACKEND_URL="${BACKEND_URL%/}"
+
+          echo "Memanggil $BACKEND_URL/internal/cleanup-fotos ..."
+          # --silent  : jangan tampilkan bar progres
+          # --fail    : keluar dengan kode error kalau respons bukan 2xx,
+          #             supaya run berakhir merah dan terlihat di badge CI
+          # --max-time: hentikan kalau backend menggantung
+          respons=$(curl --silent --show-error --fail --max-time 120 \
+            --request POST \
+            --header "X-Cleanup-Token: ${CLEANUP_TOKEN}" \
+            "$BACKEND_URL/internal/cleanup-fotos")
+
+          echo "Hasil: $respons"

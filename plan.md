@@ -23,7 +23,8 @@ Status per Oktober 2026. `[x]` sudah ada di kode · `[ ]` belum.
 - [x] `schema.sql` (instalasi baru) & `migrate.sql` (DB lama) — ✅ ditulis
 - [ ] Seed `shoes` dari price list klien (**menunggu data dari Excel**)
 - [ ] RLS + policy Supabase (**WAJIB sebelum deploy publik**)
-- [ ] Storage bucket + Object TTL policy (hapus foto otomatis 7–30 hari)
+- [x] Hapus foto otomatis 7 hari — endpoint `/internal/cleanup-fotos` + cron
+      GitHub Actions (Supabase free tier tidak punya TTL bawaan)
 
 ## Phase 2: Backend FastAPI — ✅
 
@@ -35,7 +36,9 @@ Status per Oktober 2026. `[x]` sudah ada di kode · `[ ]` belum.
 - [x] Validasi `photo_after` wajib sebelum status Selesai/Siap diambil
 - [x] Kunci & secret dipindah ke `.env` (lihat `.env.example`)
 - [x] `bootstrap_admin.py` — set password admin sekali jalan
-- [ ] Upload foto ke Supabase Storage + kompresi 2 MB
+- [x] Upload foto ke Supabase Storage + kompresi 2 MB
+- [x] Rate limiting (`slowapi`, in-memory): login 5/menit, register 3/jam,
+      tracking 30/menit, booking 10/jam, global 300/menit
 - [ ] Export Excel/CSV
 - [ ] `requirements.txt` lengkap
 
@@ -52,7 +55,10 @@ Status per Oktober 2026. `[x]` sudah ada di kode · `[ ]` belum.
 - [ ] Halaman CRUD admin: `sepatu`, `transaksi`, `stock`, `users`
 - [ ] Halaman `/teknisi` — antrian + upload foto (tanpa angka komisi)
 - [ ] Halaman `/drop-point`
-- [ ] Supabase Realtime agar status berubah tanpa refresh
+- [x] Status berubah tanpa refresh — polling otomatis 20 detik di `StatusTracker`
+      (berhenti saat status final / tab tersembunyi). Supabase Realtime
+      ditunda sampai RLS aktif, karena `postgres_changes` menghormati RLS
+      dan anon key tanpa policy ketat bisa membaca transaksi orang lain.
 
 ## Phase 4: Laporan & WhatsApp — ⬜
 

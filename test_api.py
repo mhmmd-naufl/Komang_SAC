@@ -5,7 +5,13 @@ Jalankan dari folder project:
     .\\.venv\\Scripts\\python.exe test_api.py
 """
 
+import os
 import sys
+
+# Harus diset SEBELUM import main: rate limit login 5/menit akan menolak
+# percobaan keenam, dan test ini memanggil login belasan kali dari IP yang
+# sama. Produksi tidak menyentuh variabel ini, jadi tetap terlindungi.
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 
 sys.path.insert(0, ".")
 

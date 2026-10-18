@@ -7,6 +7,14 @@ import { cn } from '../utils/helpers'
 
 const FLOW = ['Diterima', 'Diproses', 'Diperiksa', 'Selesai', 'Siap diambil']
 
+// Status akhir: tidak ada gunanya polling lagi, pelanggan tinggal ambil.
+const STATUS_FINAL = ['Selesai', 'Siap diambil']
+
+// Interval cek status otomatis (ms). 20 detik = 3 request/menit, jauh di
+// bawah rate limit backend (30/menit untuk endpoint tracking) sehingga
+// pengunjung satu tab pun tidak akan pernah kena 429.
+const INTERVAL_POLLING = 20000
+
 const FLOW_META = {
   Diterima: { icon: Package, desc: 'Sepatu diterima & dicatat oleh drop point' },
   Diproses: { icon: Loader2, desc: 'Sedang dicuci oleh teknisi' },
@@ -38,25 +46,39 @@ export default function StatusTracker() {
   const [error, setError] = useState(null)
   const [notFound, setNotFound] = useState(false)
   const [config, setConfig] = useState(null)
+  // Epoch ms terakhir data berhasil dimuat. Hanya diperbarui saat SUKSES,
+  // supaya label "diperbarui X" tidak ikut berubah saat request gagal.
+  const [terakhirDiperbarui, setTerakhirDiperbarui] = useState(null)
+  // Dipasang saat polling kena 404: transaksi hilang di tengah jalan.
+  // Mencegah polling terus berjalan percuma tiap 20 detik.
+  const [pollingBerhenti, setPollingBerhenti] = useState(false)
 
   useEffect(() => {
     document.title = 'Cek Status — Komang SAC'
     configApi.get().then(({ data }) => setConfig(data)).catch(() => {})
   }, [])
 
-  const cari = useCallback(async (nomor) => {
+  const cari = useCallback(async (nomor, { senyap = false } = {}) => {
     const trimmed = nomor.trim().toUpperCase()
     if (!trimmed) return
 
-    setSearching(true)
-    setError(null)
-    setNotFound(false)
-    setResult(null)
-    setGrup(null)
+    // Mode senyap dipakai polling: TIDAK mengosongkan hasil lama dan tidak
+    // menyalakan spinner. Kalau tidak, layar akan kedip kosong tiap 20 detik.
+    if (!senyap) {
+      setSearching(true)
+      setError(null)
+      setNotFound(false)
+      setResult(null)
+      setGrup(null)
+      // Pencarian baru = kesempatan baru; jangan bawa status "polling berhenti"
+      // dari kode sebelumnya.
+      setPollingBerhenti(false)
+    }
 
     try {
       const { data } = await transactionsApi.tracking(trimmed)
       setResult(data)
+      setTerakhirDiperbarui(Date.now())
       // Booking multi-pasang: ambil pasangan lain supaya konsumen tidak
       // mengetik kode satu per satu. Gagal memuat grup bukan alasan
       // menyembunyikan status utamanya.
@@ -69,14 +91,58 @@ export default function StatusTracker() {
     } catch (err) {
       const status = err?.response?.status
       if (status === 404) {
-        setNotFound(true)
-      } else {
+        // Saat polling, 404 berarti transaksi dihapus di tengah jalan.
+        // Jangan timpa layar yang sedang dipakai dengan pesan "tidak
+        // ditemukan" -- cukup hentikan polling dan diamkan apa adanya.
+        if (!senyap) setNotFound(true)
+        else setPollingBerhenti(true)
+      } else if (!senyap) {
         setError(err?.friendlyMessage || 'Gagal mencari transaksi. Coba lagi.')
       }
+      // Kalau senyap dan error-nya bukan 404 (mis. backend sedang mati),
+      // diamkan saja: cycle berikutnya akan mencoba lagi. Menampilkan
+      // error di sini hanya membuat pengunjung panik untuk gangguan
+      // sesaat yang tidak perlu mereka lihat.
     } finally {
-      setSearching(false)
+      if (!senyap) setSearching(false)
     }
   }, [])
+
+  // --- Polling: perbarui status tanpa refresh manual ---------------------
+  // Kenapa bukan Supabase Realtime? Realtime `postgres_changes` menghormati
+  // RLS. Pakai anon key di browser tanpa policy yang ketat berarti siapa
+  // pun bisa membaca transaksi orang lain. RLS belum rapi, jadi polling
+  // dipilih dulu: aman, tanpa dependency baru, dan langsung berfungsi.
+  const kodeDipantau = result?.kode || ''
+  const sudahFinal = result ? STATUS_FINAL.includes(result.status) : false
+
+  useEffect(() => {
+    // Berhenti kalau: belum ada hasil / status sudah final / tab tersembunyi /
+    // polling dimatikan karena 404.
+    if (!kodeDipantau || sudahFinal || pollingBerhenti) return undefined
+
+    const id = setInterval(() => {
+      // Cek lagi di dalam interval: tab bisa saja sudah disembunyikan
+      // sejak interval dibuat. Tanpa ini, tab background tetap membuang
+      // kuota request tiap 20 detik.
+      if (document.visibilityState !== 'visible') return
+      if (!navigator.onLine) return // offline: jangan spam request yang pasti gagal
+      cari(kodeDipantau, { senyap: true })
+    }, INTERVAL_POLLING)
+
+    return () => clearInterval(id)
+  }, [kodeDipantau, sudahFinal, pollingBerhenti, cari])
+
+  // Saat tab kembali terlihat, langsung segarkan sekali -- pengunjung tidak
+  // perlu menunggu sisa waktu interval untuk melihat status terbaru.
+  useEffect(() => {
+    if (!kodeDipantau || sudahFinal || pollingBerhenti) return undefined
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') cari(kodeDipantau, { senyap: true })
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [kodeDipantau, sudahFinal, pollingBerhenti, cari])
 
   // Link /status?kode=KS-XXXXXX (dari halaman akun atau setelah booking)
   // langsung mengisi form dan mencari -- konsumen tidak mengetik ulang kodenya.
@@ -102,7 +168,6 @@ export default function StatusTracker() {
 
   // Estimasi per layanan (kolom estimasi_hari di master shoes; default 3).
   // Dipakai untuk tanggal estimasi dan penanda keterlambatan yang halus.
-  const STATUS_FINAL = ['Selesai', 'Siap diambil']
   const estimasiHari = result?.shoes?.estimasi_hari || 3
   const tanggalEstimasi = result?.created_at
     ? new Date(new Date(result.created_at).getTime() + estimasiHari * 86400000)
@@ -164,6 +229,36 @@ export default function StatusTracker() {
                 {getStatusConfig(result.status).label}
               </span>
             </div>
+
+            {/* Penanda bahwa halaman ini hidup: status diperbarui sendiri tiap
+                20 detik selama masih ada yang perlu ditunggu. Kalau status
+                sudah final, tulisannya berganti -- tidak ada lagi yang perlu
+                dipantau, pelanggan tinggal ambil. */}
+            <div className="px-5 py-2 bg-primary-50 border-t border-primary-100 flex items-center gap-2 text-xs text-primary-700">
+              {sudahFinal ? (
+                <>
+                  <PackageCheck className="h-3.5 w-3.5" />
+                  Pengerjaan sudah selesai — silakan ambil di drop point.
+                </>
+              ) : (
+                <>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-primary-600" />
+                  </span>
+                  Diperbarui otomatis
+                  {terakhirDiperbarui && (
+                    <span className="text-primary-500">
+                      · terakhir {new Date(terakhirDiperbarui).toLocaleTimeString('id-ID', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+
             <div className="p-5 grid sm:grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-slate-500 text-xs">Sepatu</p>
