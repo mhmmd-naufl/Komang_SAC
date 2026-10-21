@@ -267,6 +267,12 @@ Filter tambahan: `status`, `urut`, `dari`/`sampai` (transaksi), `tipe`,
 | `aktif_only=true` | hanya yang aktif | panel admin, tab "Aktif" |
 | `cari_status=false` | hanya yang **nonaktif** | panel admin, tab "Nonaktif" |
 
+Kalau `cari_status` diisi, dia **mengalahkan `aktif_only`**. Jadi
+`?cari_status=false` saja sudah cukup untuk mencari yang nonaktif — tanpa
+harus ikut mengirim `aktif_only=false`. Kalau keduanya difilter terpisah,
+PostgREST menyANDkan `status=true` dan `status=false`, dan hasilnya selalu
+kosong.
+
 Karena `aktif_only` default-nya `True`, panel admin **wajib** mengirim
 `aktif_only=false` — kalau tidak, master yang dinonaktifkan tidak akan pernah
 tampak dan tidak bisa dihidupkan kembali.
@@ -358,6 +364,11 @@ Dua kolom tambahan di sisi konsumen:
 | `periode=bulan&bulan=10&tahun=2026` | Satu bulan, grafik per **hari** |
 | `periode=tahun&tahun=2026` | Satu tahun, grafik per **bulan** |
 | `periode=semua` | Seluruh riwayat, grafik per **bulan** |
+
+Default-nya `semua`, jadi ketiga endpoint itu tetap jalan dipanggil tanpa
+parameter apa pun. Kalau periodenya bukan `semua`, `tahun` (dan `bulan` untuk
+periode bulan) wajib diisi — kalau tidak, backend menolak dengan 400, bukan
+menebak periode diam-diam.
 
 Granularitas grafik mengikuti periode: satu bulan → per hari, satu tahun →
 per bulan. Bucket harian/bulanan dihitung di zona **WIB** (UTC+7) supaya
@@ -543,6 +554,13 @@ curl -X POST http://localhost:8001/internal/cleanup-fotos \
   masih terkomentari di `migrate.sql` bagian [7] — **aktifkan sebelum deploy
   ke publik**, kalau tidak anon key masih bisa membaca semua tabel.
 - **Guard CI** gagal kalau `.env` atau folder `privat/` ikut ter-commit.
+
+- **Audit proteksi endpoint** (`check_auth.py`) membedakan tiga jenis
+  proteksi: JWT (mayoritas), token statis lewat header
+  (`POST /internal/cleanup-fotos` — dibandingkan dengan `hmac.compare_digest`),
+  dan yang memang publik. Untuk yang pakai token statis, auditnya memverifikasi
+  dari source endpoint, bukan dari nama route saja — jadi kalau perbandingan
+  token suatu saat dihapus, audit ikut gagal, bukan lolos diam-diam.
 
 ---
 

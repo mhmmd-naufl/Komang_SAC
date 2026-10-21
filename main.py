@@ -1295,7 +1295,7 @@ STATUS_AWAL = ("Diterima", "Diproses", "Diperiksa")
 
 @app.get("/api/stats/admin", response_model=StatsResponse, tags=["Stats"])
 def admin_stats(
-    periode: str = "bulan",
+    periode: str = "semua",
     bulan: Optional[int] = None,
     tahun: Optional[int] = None,
     _: dict = Depends(require_role("admin")),
@@ -1307,6 +1307,11 @@ def admin_stats(
       - `bulan&bulan=10&tahun=2026` -> satu bulan, grafik per HARI
       - `tahun&tahun=2026`         -> satu tahun, grafik per BULAN
       - `semua`                     -> seluruh riwayat, grafik per BULAN
+
+    Default-nya `semua`, jadi endpoint ini tetap jalan dipanggil tanpa
+    parameter apa pun. Kalau periodenya bukan `semua`, `tahun` (dan `bulan`
+    untuk periode bulan) wajib diisi -- kalau tidak, backend menolak dengan
+    400, bukan menebak periode diam-diam.
 
     Angka omzet, Shoes washed, dan komisi teknisi dihitung dari transaksi yang
     SUDAH SELESAI (`selesai_at` ada dan berada di dalam periode). Transaksi yang
@@ -1433,7 +1438,7 @@ class AnalyticsResponse(BaseModel):
 
 @app.get("/api/dashboard", tags=["Dashboard"])
 def dashboard_summary(
-    periode: str = "bulan",
+    periode: str = "semua",
     bulan: Optional[int] = None,
     tahun: Optional[int] = None,
     _: dict = Depends(require_role("admin")),
@@ -1516,7 +1521,7 @@ def dashboard_summary(
 
 @app.get("/api/analytics/summary", response_model=AnalyticsResponse, tags=["Analytics"])
 def analytics_summary(
-    periode: str = "bulan",
+    periode: str = "semua",
     bulan: Optional[int] = None,
     tahun: Optional[int] = None,
     _: dict = Depends(require_role("admin")),
@@ -1628,6 +1633,8 @@ def list_sepatu(
       publik supaya layanan yang dinonaktifkan tidak bocor ke pelanggan.
     - `cari_status=false` -> hanya yang NONAKTIF. Ini yang dipakai panel admin
       supaya ia bisa menemukan layanan yang perlu dihidupkan kembali.
+      Kalau `cari_status` diisi, dia mengALAHKAN `aktif_only` -- jadi
+      `?cari_status=false` saja sudah cukup untuk mencari yang nonaktif.
 
     Panel admin yang mau melihat semuanya mengirim keduanya: `aktif_only=false`
     (supaya tidak ada filter) dan `cari_status` tidak diisi sama sekali.
@@ -1639,10 +1646,15 @@ def list_sepatu(
 
     def bangun() -> object:
         query = supabase.from_("shoes").select("*", count="exact")
-        if aktif_only:
-            query = query.eq("status", True)
+        # `cari_status` menang kalau keduanya diisi. Kalau difilter terpisah
+        # (aktif_only -> status=true, lalu cari_status -> status=false),
+        # PostgREST menyANDkan keduanya dan hasilnya selalu kosong --
+        # caller yang sudah menjelaskan status yang dicari tidak perlu juga
+        # mengirim `aktif_only`.
         if cari_status is not None:
             query = query.eq("status", cari_status)
+        elif aktif_only:
+            query = query.eq("status", True)
         if grup:
             query = query.eq("kelompok", grup)
         # `merk` sekarang berisi nama layanan, jadi cari juga di keterangan:
