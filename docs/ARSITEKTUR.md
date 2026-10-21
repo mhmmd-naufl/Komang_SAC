@@ -569,7 +569,7 @@ curl -X POST http://localhost:8001/internal/cleanup-fotos \
 | Dokumen | Isi |
 |---|---|
 | [OPERASIONAL.md](OPERASIONAL.md) | Setup, CI, secret, deploy |
-| [RENCANA-REPO-PRIVAT.md](RENCANA-REPO-PRIVAT.md) | Rencana repo privat untuk file sensitif |
+| [REPO-PRIVAT.md](REPO-PRIVAT.md) | Repo privat untuk file sensitif (kredensial, data) |
 | [prd.md](prd.md) | Spesifikasi fitur per role |
 | [plan.md](plan.md) | Roadmap + status implementasi |
 | [design.md](design.md) | Sistem desain UI |

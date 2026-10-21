@@ -99,7 +99,12 @@ cd frontend && npm install && cd ..
 #    (punya database lama? pakai migrate.sql, aman diulang)
 
 # 4. Konfigurasi
-copy .env.example .env         # isi SUPABASE_SERVICE_ROLE_KEY + JWT_SECRET_KEY
+#    Kredensial backend tinggal di repo privat (folder privat/).
+#    Di laptop baru:
+#      git clone https://github.com/mhmmd-naufl/Komang_SAC_privat.git privat
+#      copy privat\frontend.env frontend\.env
+#    Kalau repo privat tidak tersedia, isi manual:
+#      copy .env.example privat\.env
 copy frontend\.env.example frontend\.env
 
 # 5. Jalankan
@@ -111,6 +116,12 @@ Backend: <http://127.0.0.1:8001> · Frontend: <http://localhost:3000>
 
 > Port **8001**, bukan 8000 — port 8000 dipakai aplikasi lain di mesin yang sama.
 > Kalau dua backend merebut satu port, frontend diam-diam memakai API yang salah.
+
+> **Kredensial tidak ada di repo ini.** Repo publik ini memang harus tetap
+> publik, jadi `.env` backend disimpan di repo GitHub **Private**
+> (`Komang_SAC_privat`) yang di-clone ke folder `privat/`. Backend membacanya
+> otomatis; folder `privat/` di-ignore repo ini dan CI gagal kalau sampai
+> ikut ter-commit. Detailnya di [docs/REPO-PRIVAT.md](docs/REPO-PRIVAT.md).
 
 ---
 
@@ -135,6 +146,13 @@ Backend: <http://127.0.0.1:8001> · Frontend: <http://localhost:3000>
 - **Guard di CI.** Workflow gagal kalau `.env` atau folder `privat/` ikut
   ter-commit. Secret dibaca lewat `env:` dan tidak pernah ditulis ke log.
 
+- **Rahasia tidak pernah menyentuh repo publik.** Kredensial backend disimpan
+  di repo GitHub **Private** terpisah, di-clone ke folder `privat/` yang
+  di-ignore. Bukan branch privat — history repo publik bisa bocor ke commit
+  yang salah, dan mengoreksinya berarti rewrite history. Modularisasi
+  kredensial jadi **repo kedua**, jadi memindahkannya ke device baru cuma
+  `git clone`, tanpa ada yang perlu diketik ulang.
+
 - **Laporan omzet dihitung dari tanggal *selesai*, bukan tanggal masuk.**
   Cucian yang masuk tanggal 31 dan selesai tanggal 2 adalah hasil bulan 2.
 
@@ -148,7 +166,7 @@ Dokumentasi lengkap ada di folder [`docs/`](docs/):
 |---|---|
 | [ARSITEKTUR.md](docs/ARSITEKTUR.md) | Model data, 51 endpoint, pagination, laporan, AI, rate limit, TTL foto |
 | [OPERASIONAL.md](docs/OPERASIONAL.md) | Setup, environment variable, CI, deploy, troubleshooting |
-| [RENCANA-REPO-PRIVAT.md](docs/RENCANA-REPO-PRIVAT.md) | Rencana repo privat untuk file sensitif |
+| [REPO-PRIVAT.md](docs/REPO-PRIVAT.md) | Repo privat untuk file sensitif (kredensial, data) |
 | [prd.md](docs/prd.md) | Spesifikasi fitur per role |
 | [plan.md](docs/plan.md) | Roadmap + status implementasi |
 | [design.md](docs/design.md) | Sistem desain UI |

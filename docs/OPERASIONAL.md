@@ -53,9 +53,26 @@ Kalau semua baris keluar "lengkap", database sudah siap dipakai.
 
 ### 3. Konfigurasi env
 
+Kredensial backend **tidak ada di repo publik**. Semuanya tinggal di repo
+privat (`Komang_SAC_privat`), di folder `privat/` — dan folder itu diabaikan
+`.gitignore` repo publik.
+
+Cara tercepat di laptop baru:
+
 ```bash
-copy .env.example .env      # Windows
-cp .env.example .env        # Linux/macOS
+git clone https://github.com/mhmmd-naufl/Komang_SAC.git
+cd Komang_SAC
+git clone https://github.com/mhmmd-naufl/Komang_SAC_privat.git privat
+```
+
+Folder `privat/` sekarang sudah berisi `.env` (kredensial backend) dan
+`frontend.env` (variabel `VITE_*`).
+
+Kalau `privat/.env` belum ada — misalnya repo privatnya belum ter-clone:
+
+```bash
+copy .env.example privat\.env   # Windows
+cp .env.example privat/.env      # Linux/macOS
 ```
 
 Lalu isi minimal:
@@ -65,6 +82,17 @@ SUPABASE_URL=https://xxxx.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=...   # WAJIB — bukan anon key
 JWT_SECRET_KEY=<string acak>
 ```
+
+Backend membacanya dari dua sumber, berurutan — **yang dimuat dulu menang**:
+
+| Urutan | Sumber | Peran |
+|---|---|---|
+| 1 | `.env` di root | Override lokal per-PC (opsional, boleh tidak ada) |
+| 2 | `privat/.env` | Kredensial utama, hasil clone repo privat |
+
+Jadi kalau butuh menimpa satu nilai sementara (mis. key OpenRouter
+beda), buat `.env` di root berisi **hanya** nilai itu — sisanya tetap
+diambil dari `privat/.env`.
 
 Opsional: `OPENROUTER_API_KEY` + `OPENROUTER_MODELS` untuk ringkasan AI. Tanpa
 keduanya dashboard tetap jalan dengan ringkasan berbasis aturan.
@@ -86,9 +114,9 @@ Buat `JWT_SECRET_KEY` dengan:
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Kalau `.env` masih berisi nilai placeholder, backend **akan berhenti** saat start.
-Itu disengaja — JWT menandatangani sesi login, jadi secret yang lemah berarti siapa
-pun bisa memalsukan token admin.
+Kalau `privat/.env` masih berisi nilai placeholder, backend **akan berhenti**
+saat start. Itu disengaja — JWT menandatangani sesi login, jadi secret yang
+lemah berarti siapa pun bisa memalsukan token admin.
 
 Atau pakai script bantu, yang menanyakan bagian yang kosong saja:
 
@@ -96,8 +124,20 @@ Atau pakai script bantu, yang menanyakan bagian yang kosong saja:
 .venv\Scripts\python.exe setup_env.py
 ```
 
-Script aman dijalankan berkali-kali: kalau `.env` sudah ada, isinya **tidak**
-ditimpa — hanya bagian yang masih kosong yang ditanyakan.
+Script aman dijalankan berkali-kali: kalau `privat/.env` sudah ada, isinya
+**tidak** ditimpa — hanya bagian yang masih kosong yang ditanyakan. Kalau
+file-nya belum ada sama sekali, script membuatnya dari `.env.example` (dan
+membuat folder `privat/` kalau belum ada).
+
+Variabel frontend ada di `frontend/.env`. Setelah clone repo privat, salin
+satu file itu:
+
+```bash
+copy privat\frontend.env frontend\.env
+```
+
+Isinya cuma `VITE_*` — bukan rahasia, tapi tetap perlu ada supaya frontend
+tahu address backend-nya.
 
 ### 4. Set password admin
 
@@ -210,7 +250,8 @@ Script yang tersedia:
 
 ## 2. Referensi Environment Variable
 
-Semua dibaca backend dari `.env`. Lihat `.env.example` untuk daftar lengkap
+Semua dibaca backend dari `privat/.env` (atau `.env` di root kalau mau
+override lokal). Lihat `.env.example` untuk daftar lengkap
 dengan komentar.
 
 | Variabel | Wajib? | Fungsi |
@@ -262,7 +303,7 @@ aman untuk fork yang tidak punya akses ke database.
    | Nama secret | Isi |
    |---|---|
    | `SUPABASE_SERVICE_ROLE_KEY` | service role key dari Supabase → Project Settings → API |
-   | `JWT_SECRET_KEY` | sama persis dengan yang ada di `.env` lokal |
+   | `JWT_SECRET_KEY` | sama persis dengan yang ada di `privat/.env` |
    | `SUPABASE_URL` | opsional; kalau kosong dipakai default project ini |
    | `BUSINESS_NAME` | opsional; nama bisnis yang tampil di halaman depan |
    | `BUSINESS_PHONE` | opsional; nomor WA outlet untuk pelanggan (tombol WA di form booking & halaman lacak status). Frontend punya fallback sendiri, jadi kosong pun tidak merusak tampilan. Kalau diisi, `test_api.py` ikut memastikan nomor itu tidak kosong di respons `/api/config` |
@@ -288,9 +329,9 @@ menulis apa pun.
 
 - [ ] Jalankan `migrate.sql` di Supabase (termasuk kolom `selesai_at`)
 - [ ] Jalankan `python seed_pricelist.py` untuk mengisi 27 layanan asli
-- [ ] Ganti `JWT_SECRET_KEY` di `.env`
+- [ ] Ganti `JWT_SECRET_KEY` di `privat/.env`
 - [ ] Ganti password admin bawaan — `python manage_users.py reset 628980570911 "..."`
-- [ ] Isi `BUSINESS_PHONE` di `.env` backend — nomor WA outlet yang dipakai
+- [ ] Isi `BUSINESS_PHONE` di `privat/.env` — nomor WA outlet yang dipakai
       pelanggan untuk menghubungi (tombol WA di form booking dan di halaman
       lacak status). **Tidak wajib**: frontend punya fallback `WA_DEFAULT`
       di `BookingModal.jsx` dan `StatusTracker.jsx`, jadi link tetap jalan
@@ -320,11 +361,51 @@ menulis apa pun.
 
 ---
 
-## 6. Troubleshooting
+## 6. Migrasi ke Device Baru
+
+Kredensial ikut ke device baru **tanpa perlu mengetik ulang**, karena ada
+repo privat terpisah.
+
+```bash
+# 1. Clone repo publik
+git clone https://github.com/mhmmd-naufl/Komang_SAC.git
+cd Komang_SAC
+
+# 2. Clone repo privat ke folder privat/
+git clone https://github.com/mhmmd-naufl/Komang_SAC_privat.git privat
+
+# 3. Frontend butuh variabel VITE_* (satu file)
+copy privat\frontend.env frontend\.env
+```
+
+Selesai. `privat/.env` sudah terbaca backend otomatis — tidak ada yang perlu
+diketik manual.
+
+Langkah sisanya tetap seperti biasa:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+cd frontend && npm install
+```
+
+Kalau `privat/.env` ternyata belum ada (mis. repo privatnya belum ter-clone
+atau mau mulai dari nol), jalankan `setup_env.py` — dia akan membuat
+`privat/.env` dari `.env.example` dan menanyakan bagian yang kosong.
+
+Kalau di device baru kamu mau **key berbeda** dari yang ada di
+`privat/.env` (mis. OpenRouter key sendiri), buat `.env` di root berisi
+nilai itu saja. Backend memuat `.env` root lebih dulu, jadi isinya yang
+menang, dan sisanya tetap diambil dari `privat/.env`.
+
+---
+
+## 7. Troubleshooting
 
 | Gejala | Penyebab & solusi |
 |---|---|
-| Backend berhenti saat start: "JWT_SECRET_KEY belum diisi" | `.env` belum ada / nilainya masih placeholder. Isi dengan `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| Backend berhenti saat start: "JWT_SECRET_KEY belum diisi" | `privat/.env` belum ada / nilainya masih placeholder. Isi dengan `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | Backend berhenti: "SUPABASE_SERVICE_ROLE_KEY belum diisi" | Pakai anon key. Backend butuh service-role key |
 | Semua data kosong padahal tabel ada | RLS + anon key. Backend harus pakai service-role key, bukan anon |
 | Frontend "Not Found" padahal backend jalan | Port bentrok. Komang SAC pakai **8001**, bukan 8000 |

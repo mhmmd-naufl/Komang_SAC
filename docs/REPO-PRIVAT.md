@@ -1,8 +1,10 @@
-# Rencana: Repo Privat untuk File Sensitif
+# Repo Privat untuk File Sensitif
 
-> **Status: BELUM DIJALANKAN.** Dokumen ini adalah rancangan, bukan
-> deskripsi kondisi sekarang. `.gitignore` sudah disiapkan (`/privat/`), tapi
-> folder `privat/` belum dibuat dan repo privatnya belum ada di GitHub.
+> **Status: SUDAH DIIJALANKAN.** Repo privatnya ada di
+> <https://github.com/mhmmd-naufl/Komang_SAC_privat> (visibility **Private**),
+> folder `privat/` sudah dibuat, dan backend sudah membaca `.env` dari sana.
+> Dokumen ini menjelaskan setup tersebut sekaligus cara memindahkannya ke
+> device baru.
 
 ---
 
@@ -69,28 +71,24 @@ tidak ada sama sekali.
 
 ---
 
-## Rencana Eksekusi
+## Yang Sudah Dijalankan
 
-### Fase 0 — Manual (browser, ±2 menit)
+### Fase 0 — Repo privat dibuat (manual)
 
-1. Buka <https://github.com/new>
-2. Owner `mhmmd-naufl` · Nama `Komang_SAC_privat`
-3. **Visibility: Private** ← WAJIB
-4. **Jangan** centang "Add a README file" (biar push pertama bersih tanpa conflict)
-5. Create → **verifikasi** halaman repo menampilkan badge **Private**
+1. Dibuat di <https://github.com/new> — owner `mhmmd-naufl`, nama
+   `Komang_SAC_privat`
+2. **Visibility: Private** ✅ (diverifikasi: API anonim balas 404, `ls-remote`
+   dengan kredensial berhasil)
+3. Tidak dicentang "Add a README file", jadi push pertama bersih tanpa conflict
 
-> Kalau kelewat jadi Public: hapus & buat ulang repo itu. Kredensial yang
-> pernah ter-push ke publik = bocor permanen (commit masih ada di history
-> walau branch-nya dihapus).
-
-### Fase 1 — Pembersihan repo publik (sudah selesai)
+### Fase 1 — Pembersihan repo publik
 
 - [x] 5 file scratch dibuang: `_check_active.py`, `_check_shoes.py`,
       `_fix_tersedia5.py`, `_test_db.py`, `_temp.txt`
 - [x] `.gitignore` diperketat: `.env.*` + `!.env.example`, `/privat/`,
       `/_*.py`, `/_temp*.txt`, `*.bak`, `*.orig`, `*.rej`
 
-### Fase 2 — Bikin repo privat di disk
+### Fase 2 — Repo privat di disk
 
 ```powershell
 New-Item -ItemType Directory privat, privat\data, privat\seed
@@ -98,14 +96,10 @@ Move-Item .env privat\.env              # kredensial asli pindah ke sini
 Copy-Item frontend\.env privat\frontend.env
 ```
 
-`privat\.gitignore`:
+`privat\.gitignore` — **tidak** meng-ignore `.env` (justru itu isi utamanya),
+hanya `*.log`, `__pycache__/`, `*.bak|orig|rej`.
 
-```gitignore
-# Repo ini SENGAJA menyimpan .env -- jangan pernah di-ignore.
-*.log
-```
-
-`privat\README.md` — penjelasan singkat isi repo ini.
+`privat\README.md` — penjelasan isi repo + aturan mainannya.
 
 Init & push:
 
@@ -119,9 +113,12 @@ git push -u origin main
 cd ..
 ```
 
+Isi repo privat sekarang: `.env`, `frontend.env`, `.gitignore`, `README.md`,
+`data/.gitkeep`, `seed/.gitkeep`.
+
 ### Fase 3 — Kode supaya baca dari `privat/` (3 file)
 
-**`main.py`** (dekat baris 23-26):
+**`main.py`**:
 
 ```python
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -129,9 +126,9 @@ load_dotenv(os.path.join(_BASE_DIR, ".env"))
 load_dotenv(os.path.join(_BASE_DIR, "privat", ".env"), override=False)
 ```
 
-**`seed_pricelist.py`** (dekat baris 39-41) — potongan sama persis.
+**`seed_pricelist.py`** — potongan sama persis.
 
-**`setup_env.py`** (baris 25-26 + sebelum `shutil.copyfile`):
+**`setup_env.py`**:
 
 ```python
 CONTOH = ".env.example"
@@ -148,18 +145,21 @@ Tidak perlu diubah: `check_schema.py`, `check_auth.py`, `test_api.py`,
 
 ### Fase 4 — Guard & dokumentasi
 
-- `ci.yml` — tambah step "Pastikan folder privat/ tidak ikut ter-commit"
-- `README.md` — bagian cara clone repo privat
-- `docs/OPERASIONAL.md` — cara pakai `setup_env.py` setelah repo privat di-clone
+- [x] `ci.yml` — step "Pastikan folder privat/ tidak ikut ter-commit"
+- [x] `docs/OPERASIONAL.md` — setup env + bagian "Migrasi ke Device Baru"
+- [x] `docs/ARSITEKTUR.md` — tabel proteksi
 
 ### Fase 5 — Verifikasi
 
 ```powershell
 git status                                    # clean
-git ls-files | Select-String "privat"         # kosong
+git ls-files | Select-String "privat"         # kosong (folder-nya tidak ter-track)
+git check-ignore -v privat                    # .gitignore:51:/privat/
 git -C privat ls-files | Select-String "\.env$"   # ada .env
 .venv\Scripts\python.exe -c "import main; print('OK', main.SUPABASE_URL, len(main.JWT_SECRET))"
 ```
+
+Semua ✅ — dan `test_api.py` tetap 126 lulus, 0 gagal.
 
 ---
 
