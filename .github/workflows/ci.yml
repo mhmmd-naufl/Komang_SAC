@@ -135,12 +135,19 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          BUSINESS_NAME: ${{ secrets.BUSINESS_NAME }}
+          BUSINESS_PHONE: ${{ secrets.BUSINESS_PHONE }}
         run: |
           umask 077
           {
             echo "SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}"
             echo "JWT_SECRET_KEY=${JWT_SECRET_KEY}"
             echo "SUPABASE_URL=${SUPABASE_URL:-https://cssajztordwhsqaonzgn.supabase.co}"
+            # Info bisnis bersifat opsional: kalau secret-nya diisi, test_api.py
+            # ikut memeriksa nomor WA tidak kosong. Kalau kosong, test tetap
+            # jalan -- yang diuji hanya kontraknya, bukan konfigurasi deploy.
+            echo "BUSINESS_NAME=${BUSINESS_NAME:-Komang SAC}"
+            echo "BUSINESS_PHONE=${BUSINESS_PHONE}"
           } > .env
           echo "File .env dibuat sementara (tidak masuk git)."
 

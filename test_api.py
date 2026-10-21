@@ -554,7 +554,19 @@ if r.status_code == 200:
     body = r.json()
     check("accepted_payments berisi daftar", isinstance(body.get("accepted_payments"), list),
           str(body.get("accepted_payments")))
-    check("nomor WA bisnis ikut", bool(body.get("business_phone")), "business_phone kosong")
+
+    # BUSINESS_PHONE wajib diisi di deployment sungguhan, tapi CI memakai .env
+    # minimal (cuma service_role + JWT), jadi di sana memang tidak ada nomor
+    # bisnis. Yang selalu diuji di sini adalah KONTRAKNYA: endpoint harus
+    # memantulkan nilai BUSINESS_PHONE apa adanya -- tidak mengarang, dan
+    # tidak membocorkan nomor lain. Kalau env-nya memang diisi, emptiness
+    # ikut diperiksa.
+    phone_env = os.getenv("BUSINESS_PHONE", "").strip()
+    check("config memantulkan BUSINESS_PHONE dari env",
+          body.get("business_phone") == phone_env,
+          f"config={body.get('business_phone')!r} env={phone_env!r}")
+    if phone_env:
+        check("nomor WA bisnis ikut", bool(body.get("business_phone")), "business_phone kosong")
 
 # Metode bayar ngawur harus ditolak SEBELUM ada baris yang tertulis.
 # Uji ini sengaja hanya memakai metode yang pasti ditolak supaya tidak
