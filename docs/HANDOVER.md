@@ -146,7 +146,7 @@ KomangSAC/
 │   │   └── utils/        # Helper functions
 │   └── package.json
 │
-└── README.md             # Dokumentasi lengkap
+└── README.md             # Dokumentasi lengkap (naik satu folder ke root)
 ```
 
 ---
