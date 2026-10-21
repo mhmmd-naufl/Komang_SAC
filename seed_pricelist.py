@@ -38,7 +38,12 @@ import sys
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Sama seperti main.py: .env di root (override lokal) dimuat lebih dulu,
+# lalu privat/.env (kredensial utama) mengisi kekosongan. Yang dimuat
+# pertama menang.
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(_BASE_DIR, ".env"))
+load_dotenv(os.path.join(_BASE_DIR, "privat", ".env"), override=False)
 
 from supabase import create_client  # noqa: E402  (harus setelah load_dotenv)
 

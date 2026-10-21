@@ -3,16 +3,19 @@ setup_env.py -- buat file .env di laptop baru, sekali jalan.
 
 Kenapa file ini ada:
     .env berisi rahasia (kunci database, API key), jadi sengaja TIDAK ikut
-    ter-commit ke GitHub. Artinya setiap laptop baru harus mengisinya sendiri.
-    Script ini menyalin .env.example lalu menanya bagian yang kosong, supaya
-    tidak ada yang salah ketik atau lupa mengisi.
+    ter-commit ke repo publik. Script ini menyalin .env.example lalu menanya
+    bagian yang kosong, supaya tidak ada yang salah ketik atau lupa mengisi.
+
+    File yang dibuat ada di privat/.env -- folder repo privat, yang isinya
+    ikut ter-clone ke laptop baru. Kalau privat/.env sudah ada (sudah
+    ter-clone), script cuma mengisi bagian yang masih kosong.
 
 Pakai:
     .\\.venv\\Scripts\\python.exe setup_env.py
 
 Aman dijalankan berkali-kali:
-    * .env belum ada  -> dibuat dari .env.example lalu ditanya 5 rahasia.
-    * .env sudah ada  -> TIDAK ditimpa. Cuma mengisi yang masih kosong.
+    * privat/.env belum ada -> dibuat dari .env.example lalu ditanya 5 rahasia.
+    * privat/.env sudah ada -> TIDAK ditimpa. Cuma mengisi yang masih kosong.
     * Tidak ada nilai rahasia yang dicetak balik ke layar.
 """
 
@@ -23,7 +26,10 @@ import shutil
 import sys
 
 CONTOH = ".env.example"
-TUJUAN = ".env"
+# Kredensial utama tinggal di repo privat (folder privat/, gitignored di
+# repo publik). Script ini mengisi file di sana, bukan di root -- supaya
+# nilainya ikut ter-carry ke laptop baru bersama folder privatnya.
+TUJUAN = os.path.join("privat", ".env")
 
 # --- Lima rahasia yang TIDAK boleh ada di GitHub -------------------------
 # Isian umum (nama bisnis, alamat, drop point, model AI) sudah ter-commit
@@ -195,6 +201,10 @@ def main() -> None:
             isian = f.read()
     else:
         isian = _baca_template()
+        # Folder privat/ belum tentu ada di laptop baru.
+        folder = os.path.dirname(TUJUAN)
+        if folder:
+            os.makedirs(folder, exist_ok=True)
         shutil.copyfile(CONTOH, TUJUAN)
         print(f"Membuat {TUJUAN} baru dari {CONTOH}.\n")
 
@@ -208,7 +218,7 @@ def main() -> None:
     print(f"Ada {len(perlu_diisi)} bagian yang perlu diisi.\n")
     print("-" * 62)
     print("CATATAN PENTING:")
-    print("  Kalau kamu pindah dari laptop lain, buka .env laptop lama")
+    print("  Kalau kamu pindah dari laptop lain, buka privat/.env laptop lama")
     print("  lalu salin nilainya dari sana. Itu cara paling aman karena")
     print("  semua token yang sudah beredar tetap berlaku.")
     print("-" * 62)

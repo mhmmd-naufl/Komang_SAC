@@ -24,7 +24,16 @@ import analytics
 # Tanpa ini os.getenv() selalu None dan backend berhenti dengan pesan
 # "key belum diisi" -- disengaja, supaya salah konfigurasi gagal cepat
 # dan tidak diam-diam memakai nilai default.
-load_dotenv()
+#
+# Dua sumber, dibaca berurutan. Yang dimuat DULU menang, jadi:
+#   1. .env di root  -- override lokal per-PC (opsional, boleh tidak ada)
+#   2. privat/.env   -- kredensial utama, hasil clone repo privat
+# Kredensial asli tinggal di repo privat; file .env di root hanya untuk
+# menimpa sebagian nilai di satu komputer tanpa mengubah file yang ikut
+# repo privat (mis. mau pakai OpenRouter key berbeda sementara).
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(_BASE_DIR, ".env"))
+load_dotenv(os.path.join(_BASE_DIR, "privat", ".env"), override=False)
 
 # --- KONFIGURASI ---
 # Semua dibaca dari .env (lihat .env.example). Tidak ada fallback hardcode
