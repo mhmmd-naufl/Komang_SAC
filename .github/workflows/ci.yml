@@ -74,6 +74,14 @@ jobs:
           fi
           echo "Aman: .env tidak ada di repo."
 
+      - name: Pastikan folder privat/ tidak ikut ter-commit
+        run: |
+          if git ls-files --error-unmatch privat >/dev/null 2>&1; then
+            echo "::error file=privat::Folder privat/ ikut ter-commit ke repo publik!"
+            exit 1
+          fi
+          echo "Aman: folder privat/ tidak ada di repo."
+
   # ------------------------------------------------------------------
   # Backend + database Supabase.
   #

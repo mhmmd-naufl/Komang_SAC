@@ -7,9 +7,13 @@ venv/
 env/
 
 # --- Env & secrets ---
+# Semua .env dan turunannya (produksi/staging/dev) tidak boleh ikut commit.
+# Pola ".env.*" juga menutup .env.local dan .env.*.local.
+# File contoh dikecualikan dengan tanda ! -- berlaku juga untuk
+# frontend/.env.example karena polanya tanpa slash.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # --- Node / frontend ---
 node_modules/
@@ -18,7 +22,7 @@ frontend/.vite/
 npm-debug.log*
 yarn-error.log*
 
-# --- Editor & OS ---
+# --- Editor / OS ---
 .vscode/
 .idea/
 .DS_Store
@@ -29,6 +33,22 @@ Thumbs.db
 .mypy_cache/
 .ruff_cache/
 *.log
+
+# --- Scratch / debugging satu kali ---
+# Skrip cek-cepat / patch-cepat yang dipakai sekali lalu ditinggalkan.
+# Kalau sudah selesai, hapus dari disk juga: git rm <file>
+/_*.py
+/_temp*.txt
+
+# --- Sisa file temp dari edit / merge ---
+*.bak
+*.orig
+*.rej
+
+# --- Repo privat (file sensitif) ---
+# Folder ini adalah repo git TERPISAH yang di-push ke GitHub PRIVATE.
+# Repo publik tidak boleh pernah ikut membawanya.
+/privat/
 
 # --- Proyek TERPISAH ---
 # Rentalyzer (sistem rental). Bukan bagian Komang SAC, punya repo git
