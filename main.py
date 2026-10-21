@@ -21,8 +21,9 @@ from dotenv import load_dotenv
 import analytics
 
 # WAJIB: muat .env SEBELUM membaca konfigurasi di bawah.
-# Tanpa ini os.getenv() selalu None dan main.py diam-diam memakai nilai
-# fallback hardcode (termasuk JWT secret yang ada di source code).
+# Tanpa ini os.getenv() selalu None dan backend berhenti dengan pesan
+# "key belum diisi" -- disengaja, supaya salah konfigurasi gagal cepat
+# dan tidak diam-diam memakai nilai default.
 load_dotenv()
 
 # --- KONFIGURASI ---
@@ -44,11 +45,12 @@ def _is_placeholder(value: Optional[str]) -> bool:
 
 def get_supabase_key() -> str:
     """
-    Backend memakai service-role key karena RLS pada tabel diaktifkan.
+    Backend memakai service-role key.
 
-    service_role key MELALUI RLS, jadi backend tetap bisa menulis walau
-    policy anon tidak ada. Kunci ini hanya boleh ada di backend -- jangan
-    pernah ditaruh di frontend / .env frontend.
+    Alasannya: service_role MELALUI RLS dan boleh menulis, sedangkan anon
+    key tidak boleh menulis tabel yang RLS-nya aktif (saat ini `expenses`).
+    Kunci ini hanya boleh ada di backend -- jangan pernah ditaruh di
+    frontend / .env frontend.
     """
     key = (
         os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -59,8 +61,8 @@ def get_supabase_key() -> str:
             "SUPABASE_SERVICE_ROLE_KEY belum diisi di .env.\n"
             "  Ambil dari Supabase Dashboard > Project Settings > API Keys > "
             "service_role ( Legacy / anon ).\n"
-            "  Backend butuh kunci ini karena RLS pada tabel sudah aktif; "
-            "anon key hanya bisa membaca dan tidak bisa menulis."
+            "  Backend butuh kunci ini: service_role boleh menulis dan "
+            "melewati RLS, anon key tidak. Jangan pakai anon key."
         )
     return key.strip()
 

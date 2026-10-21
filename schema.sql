@@ -97,7 +97,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     photo_before     TEXT,
     photo_after      TEXT,
     photo_defect     TEXT,
-    photo_defect     TEXT,
 
     -- Diisi backend saat teknisi menandai status Selesai. Ini yang dipakai
     -- untuk laporan bulanan/tahunan: transaksi dihitung masuk bulan yang mana
