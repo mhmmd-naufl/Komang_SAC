@@ -37,10 +37,32 @@ PUBLIK = {
     ("GET", "/api/transaksi/grup/{grup_id}"),
 }
 
+# Endpoint yang dilindungi dengan cara lain: token statis lewat header,
+# bukan JWT. Tidak ada user yang login (dipanggil cron), jadi route ini tidak
+# punya sub-dependency auth -- tapi endpoint-nya TIDAK terbuka.
+#
+# PENTING: proteksinya diverifikasi dari source, bukan dari nama route saja.
+# Kalau nanti perbandingan token dihapus dari endpoint, audit ini harus ikut
+# gagal, bukan lolos diam-diam.
+TOKEN_HEADER = {
+    # Dipanggil cron GitHub Actions; dilindungi header X-Cleanup-Token yang
+    # dibandingkan dengan env CLEANUP_TOKEN (hmac.compare_digest).
+    ("POST", "/internal/cleanup-fotos"),
+}
+
 
 def jumlah_auth(route: APIRoute) -> int:
     """Berapa banyak sub-dependency auth yang menempel ke route ini."""
     return len(route.dependant.dependencies)
+
+
+def token_terverifikasi(route: APIRoute) -> bool:
+    """Cek apakah route benar-benar membandingkan tokennya (bukan cuma nama)."""
+    try:
+        src = inspect.getsource(route.endpoint)
+    except (OSError, TypeError):
+        return False
+    return "compare_digest" in src and "CLEANUP_TOKEN" in src
 
 
 def role_terpasang(route: APIRoute) -> str:
@@ -65,30 +87,42 @@ def run() -> int:
         # Satu route bisa punya >1 method (tidak terjadi di proyek ini, tapi
         # tetap aman: publik hanya kalau semua method-nya memang publik).
         publik = all((m, r.path) in PUBLIK for m in methods)
+        token = all(
+            (m, r.path) in TOKEN_HEADER and token_terverifikasi(r)
+            for m in methods
+        )
 
-        if not auth and not publik:
+        if not auth and not publik and not token:
             for m in methods:
                 terbuka.append((m, r.path))
 
         for m in methods:
-            rows.append((m, r.path, auth, (m, r.path) in PUBLIK, role_terpasang(r)))
+            rows.append(
+                (m, r.path, auth, (m, r.path) in PUBLIK, token, role_terpasang(r))
+            )
 
     lebar = max(len(p) for _, p, *_ in rows) + 2
     print(f"{'METHOD':<7}{'PATH':<{lebar}}{'PROTEKSI':<24}ROLE")
     print("-" * (lebar + 46))
-    for method, path, auth, publik, role in rows:
+    for method, path, auth, publik, token, role in rows:
         if publik:
             ket = "PUBLIK (sengaja)"
         elif auth:
             ket = f"auth x{auth}"
+        elif token:
+            ket = "token header"
         else:
             ket = "TERBUKA!"
         print(f"{method:<7}{path:<{lebar}}{ket:<24}{role}")
 
     total = len(rows)
-    terlindungi = sum(1 for _, _, a, _, _ in rows if a)
+    terlindungi = sum(1 for _, _, a, _, _, _ in rows if a)
+    via_token = sum(1 for _, _, a, _, t, _ in rows if t and not a)
     print("-" * (lebar + 46))
-    print(f"{total} endpoint | {terlindungi} protected | {len(PUBLIK)} publik disengaja")
+    print(
+        f"{total} endpoint | {terlindungi} protected | "
+        f"{via_token} token header | {len(PUBLIK)} publik disengaja"
+    )
 
     if terbuka:
         print("\nMASIH TERBUKA:")
