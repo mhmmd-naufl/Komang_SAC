@@ -265,7 +265,7 @@ aman untuk fork yang tidak punya akses ke database.
    | `JWT_SECRET_KEY` | sama persis dengan yang ada di `.env` lokal |
    | `SUPABASE_URL` | opsional; kalau kosong dipakai default project ini |
    | `BUSINESS_NAME` | opsional; nama bisnis yang tampil di halaman depan |
-   | `BUSINESS_PHONE` | opsional; nomor WA bisnis. Kalau diisi, `test_api.py` ikut memastikan nomor itu tidak kosong di respons `/api/config` |
+   | `BUSINESS_PHONE` | opsional; nomor WA outlet untuk pelanggan (tombol WA di form booking & halaman lacak status). Frontend punya fallback sendiri, jadi kosong pun tidak merusak tampilan. Kalau diisi, `test_api.py` ikut memastikan nomor itu tidak kosong di respons `/api/config` |
    | `OPENROUTER_API_KEY` | opsional; tanpa ini ringkasan AI otomatis jatuh ke fallback |
 
    Secret `BUSINESS_NAME` / `BUSINESS_PHONE` **tidak wajib**. Tanpa keduanya,
@@ -290,9 +290,12 @@ menulis apa pun.
 - [ ] Jalankan `python seed_pricelist.py` untuk mengisi 27 layanan asli
 - [ ] Ganti `JWT_SECRET_KEY` di `.env`
 - [ ] Ganti password admin bawaan — `python manage_users.py reset 628980570911 "..."`
-- [ ] Isi `BUSINESS_PHONE` di `.env` backend — tanpa ini, `/api/config`
-      mengirim nomor WA kosong dan tombol "Hubungi kami" di halaman depan
-      tidak punya tujuan
+- [ ] Isi `BUSINESS_PHONE` di `.env` backend — nomor WA outlet yang dipakai
+      pelanggan untuk menghubungi (tombol WA di form booking dan di halaman
+      lacak status). **Tidak wajib**: frontend punya fallback `WA_DEFAULT`
+      di `BookingModal.jsx` dan `StatusTracker.jsx`, jadi link tetap jalan
+      kalau env-nya kosong. Yang berubah hanya kalau kamu punya beberapa
+      outlet dan ingin nomor per deployment berbeda.
 - [ ] Tambahkan secret CI di GitHub (kalau mau uji database jalan di Actions)
 - [ ] Isi `CLEANUP_TOKEN` di `.env` backend, lalu tambahkan secret `BACKEND_URL`
       dan `CLEANUP_TOKEN` di GitHub Actions supaya foto auto-hapus jalan
