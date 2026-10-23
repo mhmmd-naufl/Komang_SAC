@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Footprints } from 'lucide-react'
+import { ChevronDown, Footprints, X } from 'lucide-react'
 import { formatRupiah, hargaLayanan, cn } from '../utils/helpers'
 import { shoesApi } from '../services/api'
 
@@ -32,6 +32,10 @@ export default function Catalog({ onSelectShoe }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [grupAktif, setGrupAktif] = useState(KELOMPOK[0].key)
+  // Kartu layanan yang sedang membuka daftar variannya. Pemilihan varian
+  // berada DI DALAM kartu (bukan modal terpisah) supaya di HP langkahnya
+  // terasa seperti membuka lipatan: tap kartu -> daftar varian -> booking.
+  const [kartuTerbuka, setKartuTerbuka] = useState(null)
 
   // Daftar tab dihitung setelah data masuk, karena kelompok tambahan dari
   // database hanya bisa diketahui setelah fetch selesai.
@@ -67,6 +71,40 @@ export default function Catalog({ onSelectShoe }) {
     return shoes.filter((s) => (s.kelompok || '').trim() === grup)
   }, [shoes, grup])
 
+  /**
+   * Satu kartu menampung semua baris master yang bertipe sama
+   * (jenis_treatment; tanpa tipe, nama layanannya sendiri). Baris-baris itu
+   * adalah variannya -- model kolom master menyimpan bedanya, misalnya
+   * Deep Cleaning -> "White" dan "Non White", atau Bag Cleaning -> "Small",
+   * "Medium", "Big". Pemilihan varian yang sebelumnya dua kartu terpisah
+   * kini jadi satu kartu dengan daftar pilihan di dalamnya.
+   */
+  const kartu = useMemo(() => {
+    const map = new Map()
+    for (const s of tampil) {
+      const kunci = (s.jenis_treatment || s.merk || '').trim() || 'Layanan'
+      if (!map.has(kunci)) map.set(kunci, [])
+      map.get(kunci).push(s)
+    }
+    return [...map.entries()]
+      .map(([nama, varian]) => ({
+        nama,
+        varian: [...varian].sort((a, b) =>
+          (a.harga_cuci ?? 0) - (b.harga_cuci ?? 0) ||
+          String(a.model || '').localeCompare(String(b.model || '')),
+        ),
+        // Keterangan diambil dari varian pertama yang menuliskannya.
+        keterangan: varian.map((v) => v.keterangan_treatment).find(Boolean) || null,
+        treatment: varian[0]?.jenis_treatment || null,
+        // Rentang harga: varian termurah vs termahal di kartu ini.
+        termurah: Math.min(...varian.map((v) => v.harga_cuci ?? 0)),
+        termahal: Math.max(...varian.map((v) => v.harga_cuci ?? 0)),
+      }))
+      .sort((a, b) => a.nama.localeCompare(b.nama))
+  }, [tampil])
+
+  const bukaKartu = (nama) => setKartuTerbuka((aktif) => (aktif === nama ? null : nama))
+
   if (loading) {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -100,7 +138,10 @@ export default function Catalog({ onSelectShoe }) {
             key={key}
             role="tab"
             aria-selected={key === grup}
-            onClick={() => setGrupAktif(key)}
+            onClick={() => {
+              setGrupAktif(key)
+              setKartuTerbuka(null)
+            }}
             className={cn(
               'px-4 py-2 rounded-xl text-sm font-medium transition-colors',
               key === grup
@@ -115,78 +156,126 @@ export default function Catalog({ onSelectShoe }) {
 
       {grup && (
         <p className="text-sm text-slate-500 mb-4">
-          {tampil.length} layanan di kelompok {grup}
+          {kartu.length} layanan di kelompok {grup}
         </p>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        {tampil.map((shoe) => {
-          const harga = hargaLayanan(shoe)
+        {kartu.map((k) => {
+          const terbuka = kartuTerbuka === k.nama
+          const banyakHarga = k.termurah !== k.termahal
           return (
-            <article key={shoe.id} className="card group overflow-hidden animate-fade-in flex flex-col">
+            <article
+              key={k.nama}
+              onClick={terbuka ? undefined : () => bukaKartu(k.nama)}
+              onKeyDown={
+                terbuka
+                  ? undefined
+                  : (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        bukaKartu(k.nama)
+                      }
+                    }
+              }
+              role={terbuka ? undefined : 'button'}
+              tabIndex={terbuka ? -1 : 0}
+              className={cn(
+                'card group overflow-hidden animate-fade-in flex flex-col',
+                !terbuka && 'cursor-pointer',
+              )}
+              aria-label={`Layanan ${k.nama}, ${k.varian.length} varian. Aktifkan untuk memilih varian.`}
+            >
               {/* Image Placeholder - Logo Biru */}
               <div className="aspect-square bg-gradient-to-br from-primary-50 to-primary-100 relative overflow-hidden">
                 <div className="absolute inset-0 flex items-center justify-center p-6">
                   <img
                     src={LOGO_LAYANAN}
-                    alt={shoe.merk}
+                    alt={k.nama}
                     className="max-h-full max-w-full object-contain opacity-80"
                     loading="lazy"
                   />
-                </div>
-                <div className="absolute top-3 right-3">
-                  <span className={cn(
-                    'badge',
-                    shoe.status ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
-                  )}>
-                    {shoe.status ? 'Tersedia' : 'Non Aktif'}
-                  </span>
                 </div>
               </div>
 
               <div className="p-4 flex flex-col flex-1">
                 <div className="flex items-start justify-between gap-2 mb-2">
-                  <div className="min-w-0">
-                    <h3 className="font-semibold text-slate-900 truncate">{shoe.merk}</h3>
-                    {shoe.model && <p className="text-sm text-slate-500 truncate">{shoe.model}</p>}
-                  </div>
+                  <h3 className="font-semibold text-slate-900 truncate">{k.nama}</h3>
+                  <span className="shrink-0 badge bg-slate-100 text-slate-600">
+                    {k.varian.length} varian
+                  </span>
                 </div>
 
-                {/* Treatment Badge */}
-                {shoe.jenis_treatment && (
+                {k.treatment && (
                   <span className="inline-block self-start mb-3 px-2 py-1 text-xs font-medium bg-primary-50 text-primary-700 rounded-full">
-                    {shoe.jenis_treatment}
+                    {k.treatment}
                   </span>
                 )}
 
-                {/* Description */}
-                {shoe.keterangan_treatment && (
-                  <p className="text-xs text-slate-500 mb-3 line-clamp-2">{shoe.keterangan_treatment}</p>
+                {k.keterangan && (
+                  <p className="text-xs text-slate-500 mb-3 line-clamp-2">{k.keterangan}</p>
                 )}
 
-                {/* Price & Action */}
-                <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100 mt-auto">
-                  <div className="min-w-0">
-                    {harga.rentang ? (
-                      <>
-                        <p className="text-sm font-semibold text-primary-700 truncate">{harga.teks}</p>
-                        <p className="text-xs text-slate-500">mulai dari · final setelah cek</p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-xl font-bold text-primary-700">{formatRupiah(harga.jumlah)}</p>
-                        <p className="text-xs text-slate-500">/ITEM</p>
-                      </>
-                    )}
+                {terbuka ? (
+                  /* ---------- Daftar varian: satu kartu bisa langsung dipilih di sini ---------- */
+                  <div className="mt-auto pt-3 border-t border-slate-100">
+                    <p className="text-xs text-slate-500 mb-2">Pilih varian untuk booking:</p>
+                    <div className="space-y-1.5 mb-2">
+                      {k.varian.map((v) => (
+                        <button
+                          key={v.id}
+                          onClick={() => {
+                            setKartuTerbuka(null)
+                            onSelectShoe(v)
+                          }}
+                          className="w-full flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2.5 text-left transition-colors hover:border-primary-300 hover:bg-primary-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                        >
+                          <span className="min-w-0 text-sm font-medium text-slate-800 truncate">
+                            {v.model || k.nama}
+                          </span>
+                          <span className="shrink-0 text-sm font-semibold text-primary-700">
+                            {formatRupiah(v.harga_cuci)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => setKartuTerbuka(null)}
+                      className="w-full flex items-center justify-center gap-1.5 text-xs text-slate-500 py-1.5 hover:text-slate-700"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Tutup pilihan
+                    </button>
                   </div>
-                  <button
-                    onClick={() => onSelectShoe(shoe)}
-                    className="btn-primary text-sm px-4 py-2 shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-                    aria-label={`Booking ${shoe.merk} ${shoe.model || ''}`}
+                ) : (
+                  /* ---------- Ringkasan: kartu dalam keadaan normal ---------- */
+                  <div
+                    className="mt-auto pt-3 border-t border-slate-100 flex items-center justify-between gap-3"
+                    aria-hidden="true"
                   >
-                    Booking
-                  </button>
-                </div>
+                    <div className="min-w-0">
+                      {banyakHarga ? (
+                        <>
+                          <p className="text-sm font-semibold text-primary-700 truncate">
+                            {formatRupiah(k.termurah)} - {formatRupiah(k.termahal)}
+                          </p>
+                          <p className="text-xs text-slate-500">tergantung varian</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-xl font-bold text-primary-700">
+                            {formatRupiah(k.termurah)}
+                          </p>
+                          <p className="text-xs text-slate-500">/ITEM · semua varian</p>
+                        </>
+                      )}
+                    </div>
+                    <span className="shrink-0 flex items-center gap-1 text-xs font-medium text-primary-700">
+                      Booking
+                      <ChevronDown className="h-4 w-4" />
+                    </span>
+                  </div>
+                )}
               </div>
             </article>
           )

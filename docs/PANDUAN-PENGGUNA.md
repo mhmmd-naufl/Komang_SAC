@@ -103,7 +103,10 @@ setelah kondisi barang diperiksa (lihat bagian teknisi).
 
 ### 3.2 Booking (memesan)
 
-Dari katalog, klik **Booking** pada layanan yang dijalankan:
+Dari katalog, ketuk **kartu layanannya** (bukan tombol terpisah): kartu
+membuka pilihan **varian** -- misalnya Deep Cleaning punya varian White
+dan Non White, atau Bag Cleaning punya Small/Medium/Big. Pilih varian
+yang diinginkan, dan booking langsung terbuka dengan layanan itu:
 
 - Bisa lebih dari paket dalam satu sesi — rancang transaksi seperti itu
   berbagi **satu ID grup** sehingga admin melihatnya sebagai satu reservasi.
