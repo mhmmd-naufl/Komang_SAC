@@ -101,7 +101,7 @@ export function Toaster() {
   }, [])
 
   return (
-    <div className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 pointer-events-none">
+    <div className="fixed top-4 right-4 z-[60] flex flex-col gap-2 pointer-events-none max-h-[80vh] overflow-y-auto">
       {list.map((item) => (
         <ToastItem key={item.id} item={item} />
       ))}

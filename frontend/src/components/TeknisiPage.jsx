@@ -14,6 +14,7 @@ import { transactionsApi, stockApi, shoesApi } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 import { getStatusConfig, formatDateTime, cn } from "../utils/helpers";
 import { tanggalWib } from "../utils/periode";
+import { toast } from "./Toast";
 import { SearchInput } from "./AdminUi";
 
 /**
@@ -96,30 +97,28 @@ function FilterStatus({ value, onChange, hitung, tersedia }) {
 /** Komponen upload foto per jenis */
 function PhotoUpload({ transaksi, jenis, label, wajib, onUpload }) {
   const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState(null);
 
   const handleUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
+
     // Validasi file
     if (!file.type.startsWith("image/")) {
-      setError("File harus berupa gambar");
+      toast.error("Format tidak didukung", "File harus berupa gambar.");
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setError("Ukuran maksimal 5MB");
+      toast.error("File terlalu besar", "Ukuran maksimal 5MB.");
       return;
     }
 
     setUploading(true);
-    setError(null);
     try {
       await transactionsApi.uploadPhoto(transaksi.id, jenis, e.target.files[0]);
-      setError(null);
+      toast.success(`Foto ${label.toLowerCase()} tersimpan`, `${transaksi.kode || ""} siap dipakai.`);
       if (onUpload) onUpload();
     } catch (err) {
-      setError(err.friendlyMessage || err.message || "Gagal upload");
+      toast.error("Gagal upload foto", err.friendlyMessage || err.message || "Coba lagi.");
     } finally {
       setUploading(false);
       e.target.value = ""; // Reset input
@@ -150,7 +149,6 @@ function PhotoUpload({ transaksi, jenis, label, wajib, onUpload }) {
             ? (uploading ? "Mengupload..." : "Tersimpan ✓") 
             : (wajib ? (uploading ? "Mengupload..." : "WAJIB") : "Opsional")}
           </p>
-        {error && <p className="text-[10px] text-rose-500 mt-1">{error}</p>}
       </label>
       {hasPhoto && (
         <a
@@ -178,7 +176,6 @@ export default function TeknisiPage() {
   const [cari, setCari] = useState("");
   const [terbuka, setTerbuka] = useState({});
   const [sibuk, setSibuk] = useState(null);
-  const [pesan, setPesan] = useState(null);
   // Draft catatan per transaksi. Disimpan terpisah dari baris supaya mengetik
   // tidak langsung menulis ke data -- hanya tombol Simpan yang mengirim.
   const [draftCatatan, setDraftCatatan] = useState({});
@@ -267,7 +264,6 @@ export default function TeknisiPage() {
 
   const ubahStatus = async (trx, statusBaru) => {
     setSibuk(trx.id);
-    setPesan(null);
     try {
       const payload = {
         status: statusBaru,
@@ -279,15 +275,12 @@ export default function TeknisiPage() {
       setTransaksi((prev) =>
         prev.map((t) => (t.id === trx.id ? { ...t, ...res.data } : t)),
       );
-      setPesan({
-        ok: true,
-        teks: `Status diubah ke ${getStatusConfig(statusBaru).label}.`,
-      });
+      toast.success(
+        "Status diperbarui",
+        `${trx.kode} sekarang ${getStatusConfig(statusBaru).label}.`,
+      );
     } catch (err) {
-      setPesan({
-        ok: false,
-        teks: err?.friendlyMessage || "Gagal mengubah status.",
-      });
+      toast.error("Gagal mengubah status", err?.friendlyMessage || "Coba lagi.");
     } finally {
       setSibuk(null);
     }
@@ -295,16 +288,12 @@ export default function TeknisiPage() {
 
   const klaimPekerjaan = async (trx) => {
     setSibuk(trx.id);
-    setPesan(null);
     try {
       await transactionsApi.claim(trx.id);
-      setPesan({ ok: true, teks: `Pekerjaan ${trx.kode} berhasil diambil.` });
+      toast.success("Pekerjaan diambil", `${trx.kode} sekarang di tangan kamu.`);
       await muat();
     } catch (err) {
-      setPesan({
-        ok: false,
-        teks: err?.friendlyMessage || "Gagal mengambil pekerjaan ini.",
-      });
+      toast.error("Gagal mengambil pekerjaan", err?.friendlyMessage || "Coba lagi.");
     } finally {
       setSibuk(null);
     }
@@ -312,19 +301,12 @@ export default function TeknisiPage() {
 
   const kurangiStok = async (item) => {
     setSibuk(item.id);
-    setPesan(null);
     try {
       await stockApi.reduce(item.id, 1);
-      setPesan({
-        ok: true,
-        teks: `${item.nama_item} dikurangi 1 ${item.satuan}.`,
-      });
+      toast.success("Pemakaian tercatat", `${item.nama_item} dikurangi 1 ${item.satuan}.`);
       await muat();
     } catch (err) {
-      setPesan({
-        ok: false,
-        teks: err?.friendlyMessage || "Gagal mengurangi stok.",
-      });
+      toast.error("Gagal mengurangi stok", err?.friendlyMessage || "Coba lagi.");
     } finally {
       setSibuk(null);
     }
@@ -345,7 +327,6 @@ export default function TeknisiPage() {
   const simpanCatatan = async (trx) => {
     const teks = (draftCatatan[trx.id] ?? trx.defect_notes ?? "").trim();
     setCatatanSibuk(trx.id);
-    setPesan(null);
     try {
       await transactionsApi.updateStatus(trx.id, {
         status: trx.status,
@@ -361,15 +342,12 @@ export default function TeknisiPage() {
         delete next[trx.id];
         return next;
       });
-      setPesan({
-        ok: true,
-        teks: `Catatan untuk ${trx.kode} tersimpan dan terbaca admin.`,
-      });
+      toast.success(
+        "Catatan tersimpan",
+        `Catatan untuk ${trx.kode} terbaca admin.`,
+      );
     } catch (err) {
-      setPesan({
-        ok: false,
-        teks: err?.friendlyMessage || "Gagal menyimpan catatan.",
-      });
+      toast.error("Gagal menyimpan catatan", err?.friendlyMessage || "Coba lagi.");
     } finally {
       setCatatanSibuk(null);
     }
@@ -386,24 +364,6 @@ export default function TeknisiPage() {
           Daftar pekerjaan yang sedang kamu tangani.
         </p>
       </div>
-
-      {pesan && (
-        <div
-          className={cn(
-            "flex items-start gap-2 p-3 rounded-xl text-sm border",
-            pesan.ok
-              ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-              : "bg-rose-50 border-rose-200 text-rose-700",
-          )}
-        >
-          {pesan.ok ? (
-            <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" />
-          ) : (
-            <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-          )}
-          <span>{pesan.teks}</span>
-        </div>
-      )}
 
       {error && (
         <div className="flex items-start gap-2 p-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">

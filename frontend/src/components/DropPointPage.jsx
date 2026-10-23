@@ -13,6 +13,7 @@ import { transactionsApi, shoesApi, dropPointsApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { getStatusConfig, formatRupiah, formatDateTime, cn } from '../utils/helpers'
 import { tanggalWib } from '../utils/periode'
+import { toast } from './Toast'
 import { SearchInput } from './AdminUi'
 
 /**
@@ -328,9 +329,13 @@ export default function DropPointPage() {
                     </div>
                     {siap && t.customer?.phone && (
                       <button
-                        onClick={() =>
-                          window.open(linkWa(t.customer.phone, templateSiap(t)), '_blank')
-                        }
+                      onClick={() => {
+                        window.open(linkWa(t.customer.phone, templateSiap(t)), '_blank')
+                        toast.info(
+                          'WhatsApp terbuka di tab baru',
+                          'Tinggal tekan kirim -- pesannya sudah diisi otomatis.',
+                        )
+                      }}
                         className="btn-primary w-full mt-3 text-xs py-2"
                       >
                         <MessageCircle className="h-3.5 w-3.5" />
