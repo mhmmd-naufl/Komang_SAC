@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { KeyRound, Loader2, Lock, Pencil, Plus, ShieldCheck, UserCheck } from 'lucide-react'
+import { KeyRound, Loader2, Lock, Pencil, Plus, ShieldCheck, Trash2, UserCheck } from 'lucide-react'
 import { usersApi } from '../../services/api'
+import { useAuth } from '../../contexts/AuthContext'
 import { useCariTunda, useTabel } from '../../hooks/useTabel'
 import { cn, formatDate, getRoleColor, getRoleLabel } from '../../utils/helpers'
 import { toast } from '../Toast'
 import Pagination from '../Pagination'
-import Modal, { Field, GagalMuat, Kosong, Memuat, SearchInput } from '../AdminUi'
+import Modal, { Field, GagalMuat, Kosong, KonfirmasiDialog, Memuat, SearchInput } from '../AdminUi'
 
 const PERAN = [
   { nilai: 'admin', label: 'Admin' },
@@ -53,6 +54,12 @@ export default function AdminUsers() {
   const [reset, setReset] = useState(null)
   const [kataSandi, setKataSandi] = useState('')
   const [errorSandi, setErrorSandi] = useState('')
+  // Pengguna yang dimintai konfirmasi hapus, dan status penghapusannya.
+  const [hapusUser, setHapusUser] = useState(null)
+  const [menghapus, setMenghapus] = useState(false)
+  // Tidak boleh menghapus akun sendiri -- backend juga menolak, tapi
+  // menyembunyikan tombolnya membuat kesalahan tak mungkin terjadi.
+  const { user: loginSekarang } = useAuth()
 
   const gantiPeran = (nilai) => {
     setPeranAktif(nilai)
@@ -191,6 +198,28 @@ export default function AdminUsers() {
   }
 
   const adaFilter = Boolean(cari) || Boolean(peranAktif)
+
+  /**
+   * Jalankan penghapusan setelah dialog konfirmasi setuju.
+   *
+   * Backend yang menjaga aturannya (akun sendiri, akun dengan riwayat
+   * transaksi), jadi di sini cukup memuat hasil ke toast -- termasuk
+   * waktu backend menolak dengan penjelasan jumlah transaksinya.
+   */
+  const jalankanHapus = async () => {
+    if (!hapusUser || menghapus) return
+    setMenghapus(true)
+    try {
+      await usersApi.hapus(hapusUser.id)
+      toast.success('Akun dihapus', `${hapusUser.full_name} sudah dihapus dari sistem.`)
+      setHapusUser(null)
+      tabel.muatUlang()
+    } catch (err) {
+      toast.error('Gagal menghapus', err.friendlyMessage || err.message)
+    } finally {
+      setMenghapus(false)
+    }
+  }
   const formDariBaris = (baris) => ({
     id: baris.id,
     full_name: baris.full_name ?? '',
@@ -272,6 +301,16 @@ export default function AdminUsers() {
                   >
                     <Pencil className="h-4 w-4" />
                   </button>
+                  {baris.id !== loginSekarang?.id && (
+                    <button
+                      onClick={() => setHapusUser(baris)}
+                      className="p-2 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      title="Hapus akun"
+                      aria-label={`Hapus akun ${baris.full_name}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               </td>
             </tr>
@@ -555,6 +594,19 @@ export default function AdminUsers() {
           </div>
         )}
       </Modal>
+
+      <KonfirmasiDialog
+        open={Boolean(hapusUser)}
+        onClose={() => setHapusUser(null)}
+        onKonfirmasi={jalankanHapus}
+        judul="Hapus Akun"
+        labelKonfirmasi={menghapus ? 'Menghapus...' : 'Hapus'}
+        pesan={
+          hapusUser
+            ? `Akun ${hapusUser.full_name} (${hapusUser.phone}) akan dihapus secara permanen. Akun yang punya riwayat transaksi otomatis ditolak backend -- riwayat penjualan tidak boleh kehilangan pemiliknya.`
+            : ''
+        }
+      />
     </div>
   )
 }

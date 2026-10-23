@@ -2730,6 +2730,68 @@ def update_user(user_id: str, user: ProfileUpdate, _: dict = Depends(require_rol
     return result.data[0]
 
 
+@app.delete("/api/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Users"])
+def delete_user(user_id: str, user: dict = Depends(get_current_user)):
+    """
+    Admin-only. Hapus akun (profil) secara permanen.
+
+    Aturannya sengaja ketat karena riwayat harus tetap bisa dipertanggung-
+    jawabkan:
+
+    - Tidak bisa menghapus akun sendiri: dengan ini satu-satunya jalan masuk
+      sebagai admin bisa dua kali klik hilang.
+    - Tidak bisa menghapus akun yang masih tertulis pada sebuah transaksi,
+      baik sebagai pembeli maupun sebagai pengerja. Kolom user_id memang
+      ON DELETE RESTRICT di DB, tapi tech_id akan di-set NULL diam-diam --
+      dan itu menghapus jejak siapa yang mengerjakan serta dasar perhitungan
+      komisi. Keduanya ditolak di sini dengan pesan yang bisa dibaca, bukan
+      diserahkan ke error FK yang tidak ramah.
+    """
+    if user["role"] != "admin":
+        raise HTTPException(403, "Hanya admin yang boleh menghapus akun")
+    if user_id == user["id"]:
+        raise HTTPException(400, "Tidak bisa menghapus akun sendiri")
+
+    target = (
+        supabase.from_("profiles")
+        .select("full_name")
+        .eq("id", user_id)
+        .execute()
+    )
+    if not target.data:
+        raise HTTPException(404, "User tidak ditemukan")
+    nama = (target.data[0].get("full_name") or "User").strip()
+
+    alasan = []
+    sebagai_pembeli = (
+        supabase.from_("transactions")
+        .select("id", count="exact")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if (sebagai_pembeli.count or 0) > 0:
+        alasan.append(f"{sebagai_pembeli.count} transaksi atas nama pembeli ini")
+
+    sebagai_pengerja = (
+        supabase.from_("transactions")
+        .select("id", count="exact")
+        .eq("tech_id", user_id)
+        .execute()
+    )
+    if (sebagai_pengerja.count or 0) > 0:
+        alasan.append(f"{sebagai_pengerja.count} transaksi masih tertulis dikerjakan di sini")
+
+    if alasan:
+        raise HTTPException(
+            400,
+            f"Akun {nama} tidak bisa dihapus: {', '.join(alasan)}. "
+            "Riwayat tidak boleh kehilangan pemiliknya -- biarkan akunnya tetap ada "
+            "(atau ganti nomor WhatsApp-nya), bukan dihapus.",
+        )
+
+    supabase.from_("profiles").delete().eq("id", user_id).execute()
+
+
 # ==========================================
 # CRUD DROP POINTS
 # ==========================================

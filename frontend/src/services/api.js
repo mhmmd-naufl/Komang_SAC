@@ -103,6 +103,12 @@ export const usersApi = {
    */
   resetPassword: (id, password) =>
     api.post(`/api/users/${id}/reset-password`, { password }),
+  /**
+   * Hapus akun secara permanen. Backend menolak kalau akun masih tertulis
+   * pada transaksi mana pun sebagai pembeli atau pengerja, jadi UI cukup
+   * menyampaikan pesan errornya apa adanya.
+   */
+  hapus: (id) => api.delete(`/api/users/${id}`),
 };
 
 export const dropPointsApi = {

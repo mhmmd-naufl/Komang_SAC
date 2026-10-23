@@ -683,6 +683,65 @@ else:
 
 
 # =============================================================
+section("20. Hapus akun (admin)")
+
+if tokens.get("admin"):
+    # Hapus akun sendiri: ditolak. Outlet tidak boleh bisa di-kunci-diri
+    # lewat satu klik.
+    r = client.delete(f"/api/users/{admin_id}", headers=admin_h)
+    check("hapus akun sendiri ditolak 400", r.status_code == 400, f"HTTP {r.status_code} {str(r.text)[:90]}")
+
+    # Role lain tidak boleh memanggil penghapusan akun.
+    if tokens.get("technician"):
+        r = client.delete(f"/api/users/{admin_id}", headers=tech_h)
+        check("teknisi tidak boleh hapus akun", r.status_code in (401, 403), f"HTTP {r.status_code}")
+
+    # Profil bersih (tanpa riwayat) boleh dihapus, dan hilang dari GET.
+    r = client.post(
+        "/api/users",
+        headers=admin_h,
+        json={"full_name": "Uji Hapus Akun", "phone": "628991900021", "role": "technician"},
+    )
+    if r.status_code == 201:
+        uid = r.json()["id"]
+        r = client.delete(f"/api/users/{uid}", headers=admin_h)
+        check("profil tanpa transaksi bisa dihapus", r.status_code == 204, f"HTTP {r.status_code}")
+        r = client.get(f"/api/users/{uid}", headers=admin_h)
+        check("profil uji hilang setelah dihapus", r.status_code == 404, f"HTTP {r.status_code}")
+    else:
+        check("buat profil uji (bersih)", False, f"HTTP {r.status_code} {str(r.text)[:90]}")
+
+    # Profil yang sudah punya transaksi DITOLAK -- riwayat jangan kehilangan
+    # pemiliknya. Setelah transaksinya dibersihkan, penghapusan malah jalan.
+    r = client.post(
+        "/api/users",
+        headers=admin_h,
+        json={"full_name": "Uji Hapus Dua", "phone": "628991900022", "role": "customer"},
+    )
+    if r.status_code == 201:
+        uid2 = r.json()["id"]
+        layanan = client.get("/api/sepatu").json()
+        trx = client.post(
+            "/api/transaksi", headers=admin_h,
+            json={"user_id": uid2, "shoe_id": layanan[0]["id"]},
+        )
+        if trx.status_code == 201:
+            r = client.delete(f"/api/users/{uid2}", headers=admin_h)
+            check("akun yang punya transaksi ditolak 400", r.status_code == 400,
+                  f"HTTP {r.status_code} {str(r.text)[:100]}")
+            main.supabase.from_("transactions").delete().eq("id", trx.json()["id"]).execute()
+        else:
+            check("buat transaksi uji", False, f"HTTP {trx.status_code}")
+        r = client.delete(f"/api/users/{uid2}", headers=admin_h)
+        check("hapus jalan setelah transaksinya dibersihkan", r.status_code == 204,
+              f"HTTP {r.status_code}")
+    else:
+        check("buat profil uji (punya transaksi)", False, f"HTTP {r.status_code} {str(r.text)[:90]}")
+else:
+    check("login admin tersedia untuk seksi 20", False, "token admin tidak ada")
+
+
+# =============================================================
 print("\n" + "=" * 52)
 print(f"HASIL: {passed} lulus, {failed} gagal")
 print("=" * 52)
