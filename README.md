@@ -164,6 +164,7 @@ Dokumentasi lengkap ada di folder [`docs/`](docs/):
 
 | Dokumen | Isi |
 |---|---|
+| [PANDUAN-PENGGUNA.md](docs/PANDUAN-PENGGUNA.md) | Panduan pemakaian untuk konsumen, teknisi, mitra, & admin: login, booking, tracking, panel admin |
 | [ARSITEKTUR.md](docs/ARSITEKTUR.md) | Model data, 51 endpoint, pagination, laporan, AI, rate limit, TTL foto |
 | [OPERASIONAL.md](docs/OPERASIONAL.md) | Setup, environment variable, CI, deploy, troubleshooting |
 | [REPO-PRIVAT.md](docs/REPO-PRIVAT.md) | Repo privat untuk file sensitif (kredensial, data) |
