@@ -6,6 +6,8 @@ Atur akun produksi Komang SAC sesuai keputusan owner:
 2. Pastikan ada satu akun drop point untuk mitra "Dolay Cut"
    (6289680841298, password default 'Password123' — wajib diganti setelah
    login pertama lewat /api/auth/set-password).
+3. Pastikan drop point "Outlet Utama" (outlet sendiri) tercatat di tabel
+   drop_points supaya muncul di dropdown "Titik Penjemputan" saat booking.
 
 Idempoten: dijalankan ulang tidak menduplikasi apa pun. Baris drop_points
 (dalam table "Dolay Cut") tidak disentuh sama sekali.
@@ -66,7 +68,29 @@ else:
     }).execute()
     print("Akun dibuat: %s | %s | password default %s" % (DP_NAMA, DP_PHONE, DP_PASSWORD_DEFAULT))
 
-# --- 3. Verifikasi akhir ---
+# --- 3. Outlet utama sebagai titik penjemputan ---
+# Outlet Komang SAC sendiri harus selalu jadi pilihan di dropdown booking
+# ("Titik Penjemputan"), tidak hanya mitra Dolay Cut. Alamat mengikuti
+# BUSINESS_ADDRESS di .env supaya hanya ada satu sumber kebenaran.
+OUTLET_NAMA = "Outlet Utama"
+OUTLET_ALAMAT = (
+    os.getenv("BUSINESS_ADDRESS", "").strip()
+    or "Jl. Cisadane No.3, Lingkungan Mojoroto R, Singonegaran, Kec. Banyuwangi, Kabupaten Banyuwangi, Jawa Timur 68415"
+)
+ada_outlet = c.from_("drop_points").select("id, alamat").eq("nama", OUTLET_NAMA).execute().data or []
+if ada_outlet:
+    print("Drop point '%s' sudah ada — tidak diubah." % OUTLET_NAMA)
+else:
+    c.from_("drop_points").insert({
+        "nama": OUTLET_NAMA,
+        "alamat": OUTLET_ALAMAT,
+        "wa_contact": ADMIN_SISA_PHONE,
+        "aktif": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }).execute()
+    print("Drop point ditambahkan: %s | %s" % (OUTLET_NAMA, OUTLET_ALAMAT))
+
+# --- 4. Verifikasi akhir ---
 prof = c.from_("profiles").select("full_name, phone, role").execute().data or []
 dp_points = c.from_("drop_points").select("nama, alamat").execute().data or []
 print("\nAKHIR:")

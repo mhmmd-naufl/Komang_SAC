@@ -191,9 +191,13 @@ def reset() -> None:
             n += 1
     print(f"  master layanan              : {n} dihapus")
 
-    # 4. Drop point: hanya nama dari daftar di atas
-    res = sb.from_("drop_points").delete().in_("nama", [d[0] for d in DROP_POINTS]).execute()
-    print(f"  drop point                  : {len(res.data or [])} dihapus")
+    # 4. Drop point dummy. "Outlet Utama" dikecualikan: nama itu juga nama
+    # drop point ASLI outlet (dibuat scripts/atur_akun.py) -- kalau ikut
+    # dihapus, dropdown Titik Penjemputan kehilangan outlet utamanya setiap
+    # selesai siklus uji. Dummy yang kehapus hanya mitra milik seed ini.
+    daftar_dummy = [d[0] for d in DROP_POINTS if d[0] != "Outlet Utama"]
+    res = sb.from_("drop_points").delete().in_("nama", daftar_dummy).execute()
+    print(f"  drop point dummy            : {len(res.data or [])} dihapus")
 
     # 5. Profil dummy saja (nomor admin asli dikecualikan)
     res = sb.from_("profiles").delete().in_("phone", list(DUMMY_PHONES)).execute()
