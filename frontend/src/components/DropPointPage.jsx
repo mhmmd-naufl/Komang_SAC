@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Truck,
   CheckCircle2,
@@ -8,13 +8,18 @@ import {
   MapPin,
   Phone,
   RefreshCw,
-} from 'lucide-react'
-import { transactionsApi, shoesApi, dropPointsApi } from '../services/api'
-import { useAuth } from '../contexts/AuthContext'
-import { getStatusConfig, formatRupiah, formatDateTime, cn } from '../utils/helpers'
-import { tanggalWib } from '../utils/periode'
-import { toast } from './Toast'
-import { SearchInput } from './AdminUi'
+} from "lucide-react";
+import { transactionsApi, shoesApi, dropPointsApi } from "../services/api";
+import { useAuth } from "../contexts/AuthContext";
+import {
+  getStatusConfig,
+  formatRupiah,
+  formatDateTime,
+  cn,
+} from "../utils/helpers";
+import { tanggalWib } from "../utils/periode";
+import { toast } from "./Toast";
+import { SearchInput } from "./AdminUi";
 
 /**
  * Halaman Mitra Drop Point.
@@ -27,80 +32,87 @@ import { SearchInput } from './AdminUi'
  * boleh mengubah data transaksi.
  */
 
-const STATUS_TERSEDIA = ['Diterima', 'Diproses', 'Diperiksa', 'Selesai', 'Siap diambil']
-const SIAP_AMBIL = 'Siap diambil'
+const STATUS_TERSEDIA = [
+  "Diterima",
+  "Diproses",
+  "Diperiksa",
+  "Selesai",
+  "Siap diambil",
+];
+const SIAP_AMBIL = "Siap diambil";
 
 export default function DropPointPage() {
-  const { user } = useAuth()
-  const [transaksi, setTransaksi] = useState([])
-  const [katalog, setKatalog] = useState({})
-  const [dropPoints, setDropPoints] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [cari, setCari] = useState('')
-  const [filter, setFilter] = useState('')
+  const { user } = useAuth();
+  const [transaksi, setTransaksi] = useState([]);
+  const [katalog, setKatalog] = useState({});
+  const [dropPoints, setDropPoints] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [cari, setCari] = useState("");
+  const [filter, setFilter] = useState("");
 
   const muat = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
+    setError(null);
     try {
       const [trx, sh, dp] = await Promise.all([
         transactionsApi.list({ limit: 200 }),
         shoesApi.list(),
         dropPointsApi.list(),
-      ])
-      setTransaksi(trx.data || [])
-      setKatalog(Object.fromEntries((sh.data || []).map((s) => [s.id, s])))
-      setDropPoints(dp.data || [])
+      ]);
+      setTransaksi(trx.data || []);
+      setKatalog(Object.fromEntries((sh.data || []).map((s) => [s.id, s])));
+      setDropPoints(dp.data || []);
     } catch (err) {
-      setError(err?.friendlyMessage || 'Gagal memuat data.')
+      setError(err?.friendlyMessage || "Gagal memuat data.");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [])
+  }, []);
 
   useEffect(() => {
-    muat()
-  }, [muat])
+    muat();
+  }, [muat]);
 
   /**
    * Transaksi + nama sepatu yang sudah di-resolve di sini. Dipisah supaya
    * pencarian cuma membandingkan string, bukan memanggil fungsi di dalam
    * useMemo.
    */
-  const daftar = useMemo(
-    () =>
-      transaksi.map((t) => {
-        const s = katalog[t.shoe_id]
-        return {
-          ...t,
-          nama: s ? [s.merk, s.model].filter(Boolean).join(' ') : 'Sepatu',
-        }
-      }),
-    [transaksi, katalog]
-  )
+  const daftar = useMemo(() => {
+    if (!Array.isArray(transaksi)) return [];
+    return transaksi.map((t) => {
+      const s = katalog[t.shoe_id];
+      return {
+        ...t,
+        nama: s ? [s.merk, s.model].filter(Boolean).join(" ") : "Sepatu",
+      };
+    });
+  }, [transaksi, katalog]);
 
-  const titik = dropPoints.find((d) => d.aktif) || dropPoints[0]
+  const titik = dropPoints.find((d) => d.aktif) || dropPoints[0];
 
   const hasil = useMemo(() => {
-    const q = cari.trim().toLowerCase()
+    if (!Array.isArray(daftar)) return [];
+    const q = cari.trim().toLowerCase();
     return daftar.filter((t) => {
-      if (filter && t.status !== filter) return false
-      if (!q) return true
+      if (filter && t.status !== filter) return false;
+      if (!q) return true;
       return (
-        (t.kode || '').toLowerCase().includes(q) ||
+        (t.kode || "").toLowerCase().includes(q) ||
         t.nama.toLowerCase().includes(q)
-      )
-    })
-  }, [daftar, filter, cari])
+      );
+    });
+  }, [daftar, filter, cari]);
 
   const hitungStatus = useMemo(() => {
-    const out = { semua: transaksi.length }
-    transaksi.forEach((t) => {
-      out[t.status] = (out[t.status] || 0) + 1
-    })
-    return out
-  }, [transaksi])
+  if (!Array.isArray(transaksi)) return { semua: 0 }
+  const out = { semua: transaksi.length }
+  transaksi.forEach((t) => {
+    out[t.status] = (out[t.status] || 0) + 1
+  })
+  return out
+}, [transaksi])
 
   /**
    * Berapa titipan yang MASUK hari ini (WIB).
@@ -111,26 +123,28 @@ export default function DropPointPage() {
    * tidak ikut berubah saat mitra mengetik di kolom pencarian.
    */
   const masukHariIni = useMemo(() => {
-    const hari = tanggalWib(new Date())
-    if (!hari) return 0
-    return transaksi.filter((t) => tanggalWib(t.created_at) === hari).length
-  }, [transaksi])
+  if (!Array.isArray(transaksi)) return 0
+  const hari = tanggalWib(new Date())
+  if (!hari) return 0
+  return transaksi.filter((t) => tanggalWib(t.created_at) === hari).length
+}, [transaksi])
 
   /** Link wa.me -- semi-manual: sistem menyalin template, partner yang kirim. */
   const linkWa = (nomor, pesan) =>
-    `https://wa.me/${String(nomor || '').replace(/\D/g, '')}?text=${encodeURIComponent(pesan)}`
+    `https://wa.me/${String(nomor || "").replace(/\D/g, "")}?text=${encodeURIComponent(pesan)}`;
 
   const templateSiap = (t) =>
-    `Halo, sepatu ${t.nama} dengan nomor ${t.kode} sudah selesai dan siap diambil di ${titik?.nama || 'outlet'}. Terima kasih!`
+    `Halo, sepatu ${t.nama} dengan nomor ${t.kode} sudah selesai dan siap diambil di ${titik?.nama || "outlet"}. Terima kasih!`;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-900">
-          Halo, {user?.full_name?.split(' ')[0]}
+          Halo, {user?.full_name?.split(" ")[0]}
         </h1>
         <p className="text-slate-500 mt-1">
-          Terima titipan, pantau progres, dan kabari pelanggan saat siap diambil.
+          Terima titipan, pantau progres, dan kabari pelanggan saat siap
+          diambil.
         </p>
       </div>
 
@@ -145,7 +159,10 @@ export default function DropPointPage() {
               <p className="text-sm text-primary-700 mt-0.5">{titik.alamat}</p>
               {titik.wa_contact && (
                 <a
-                  href={linkWa(titik.wa_contact, `Halo ${titik.nama}, saya ingin menanyakan layanan cuci sepatu.`)}
+                  href={linkWa(
+                    titik.wa_contact,
+                    `Halo ${titik.nama}, saya ingin menanyakan layanan cuci sepatu.`,
+                  )}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-xs font-medium text-primary-800 hover:underline mt-2"
@@ -164,7 +181,10 @@ export default function DropPointPage() {
           <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
           <div>
             <p>{error}</p>
-            <button onClick={muat} className="text-xs font-semibold underline mt-1">
+            <button
+              onClick={muat}
+              className="text-xs font-semibold underline mt-1"
+            >
               Coba lagi
             </button>
           </div>
@@ -173,18 +193,34 @@ export default function DropPointPage() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
-          { label: 'Masuk hari ini', nilai: masukHariIni, cls: 'bg-blue-500' },
-          { label: 'Semua', nilai: transaksi.length, cls: 'bg-slate-200' },
-          { label: 'Sedang diproses', nilai: hitungStatus.Diproses || 0, cls: 'bg-amber-400' },
-          { label: 'Selesai', nilai: hitungStatus.Selesai || 0, cls: 'bg-emerald-500' },
-          { label: 'Siap diambil', nilai: hitungStatus[SIAP_AMBIL] || 0, cls: 'bg-cyan-500' },
+          { label: "Masuk hari ini", nilai: masukHariIni, cls: "bg-blue-500" },
+          { label: "Semua", nilai: transaksi.length, cls: "bg-slate-200" },
+          {
+            label: "Sedang diproses",
+            nilai: hitungStatus.Diproses || 0,
+            cls: "bg-amber-400",
+          },
+          {
+            label: "Selesai",
+            nilai: hitungStatus.Selesai || 0,
+            cls: "bg-emerald-500",
+          },
+          {
+            label: "Siap diambil",
+            nilai: hitungStatus[SIAP_AMBIL] || 0,
+            cls: "bg-cyan-500",
+          },
         ].map((k) => (
           <div key={k.label} className="card p-4">
             <div className="flex items-center gap-2">
-              <span className={cn('h-2 w-2 rounded-full', k.cls)} />
-              <span className="text-xs font-medium text-slate-500">{k.label}</span>
+              <span className={cn("h-2 w-2 rounded-full", k.cls)} />
+              <span className="text-xs font-medium text-slate-500">
+                {k.label}
+              </span>
             </div>
-            <p className="mt-1.5 text-2xl font-bold text-slate-900">{loading ? '—' : k.nilai}</p>
+            <p className="mt-1.5 text-2xl font-bold text-slate-900">
+              {loading ? "—" : k.nilai}
+            </p>
           </div>
         ))}
       </div>
@@ -199,40 +235,41 @@ export default function DropPointPage() {
           />
         </div>
         <button onClick={muat} className="btn-secondary flex-shrink-0">
-          <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           Muat ulang
         </button>
       </div>
 
       <div className="flex flex-wrap gap-2">
         <button
-          onClick={() => setFilter('')}
+          onClick={() => setFilter("")}
           className={cn(
-            'px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
-            filter === ''
-              ? 'bg-primary-600 text-white border-primary-600'
-              : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+            "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+            filter === ""
+              ? "bg-primary-600 text-white border-primary-600"
+              : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50",
           )}
         >
           Semua status
         </button>
         {STATUS_TERSEDIA.map((s) => {
-          const cfg = getStatusConfig(s)
-          const aktif = filter === s
+          const cfg = getStatusConfig(s);
+          const aktif = filter === s;
           return (
             <button
               key={s}
-              onClick={() => setFilter(aktif ? '' : s)}
+              onClick={() => setFilter(aktif ? "" : s)}
               className={cn(
-                'px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
                 aktif
-                  ? cn(cfg.className, 'ring-2 ring-offset-1 ring-primary-300')
-                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  ? cn(cfg.className, "ring-2 ring-offset-1 ring-primary-300")
+                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50",
               )}
             >
-              {cfg.label} <span className="opacity-70">({hitungStatus[s] || 0})</span>
+              {cfg.label}{" "}
+              <span className="opacity-70">({hitungStatus[s] || 0})</span>
             </button>
-          )
+          );
         })}
       </div>
 
@@ -241,7 +278,10 @@ export default function DropPointPage() {
         {loading ? (
           <div className="p-8 space-y-3">
             {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-10 rounded bg-slate-100 animate-pulse" />
+              <div
+                key={i}
+                className="h-10 rounded bg-slate-100 animate-pulse"
+              />
             ))}
           </div>
         ) : hasil.length === 0 ? (
@@ -256,20 +296,35 @@ export default function DropPointPage() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="text-left font-semibold text-slate-600 px-5 py-3">Nomor</th>
-                    <th className="text-left font-semibold text-slate-600 px-4 py-3">Sepatu</th>
-                    <th className="text-left font-semibold text-slate-600 px-4 py-3">Status</th>
-                    <th className="text-left font-semibold text-slate-600 px-4 py-3">Masuk</th>
-                    <th className="text-right font-semibold text-slate-600 px-4 py-3">Nilai</th>
-                    <th className="text-right font-semibold text-slate-600 px-5 py-3">Aksi</th>
+                    <th className="text-left font-semibold text-slate-600 px-5 py-3">
+                      Nomor
+                    </th>
+                    <th className="text-left font-semibold text-slate-600 px-4 py-3">
+                      Sepatu
+                    </th>
+                    <th className="text-left font-semibold text-slate-600 px-4 py-3">
+                      Status
+                    </th>
+                    <th className="text-left font-semibold text-slate-600 px-4 py-3">
+                      Masuk
+                    </th>
+                    <th className="text-right font-semibold text-slate-600 px-4 py-3">
+                      Nilai
+                    </th>
+                    <th className="text-right font-semibold text-slate-600 px-5 py-3">
+                      Aksi
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {hasil.map((t) => {
-                    const cfg = getStatusConfig(t.status)
-                    const siap = t.status === SIAP_AMBIL
+                    const cfg = getStatusConfig(t.status);
+                    const siap = t.status === SIAP_AMBIL;
                     return (
-                      <tr key={t.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                      <tr
+                        key={t.id}
+                        className="border-b border-slate-100 last:border-0 hover:bg-slate-50"
+                      >
                         <td className="px-5 py-3 font-mono text-xs font-semibold text-slate-900">
                           {t.kode}
                         </td>
@@ -301,7 +356,7 @@ export default function DropPointPage() {
                           )}
                         </td>
                       </tr>
-                    )
+                    );
                   })}
                 </tbody>
               </table>
@@ -310,40 +365,48 @@ export default function DropPointPage() {
             {/* Mobile */}
             <div className="lg:hidden divide-y divide-slate-100">
               {hasil.map((t) => {
-                const cfg = getStatusConfig(t.status)
-                const siap = t.status === SIAP_AMBIL
+                const cfg = getStatusConfig(t.status);
+                const siap = t.status === SIAP_AMBIL;
                 return (
                   <div key={t.id} className="p-4">
                     <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-sm font-semibold">{t.kode}</span>
-                            <span className={cfg.className}>{cfg.label}</span>
-                          </div>
-                          <p className="text-sm text-slate-600 mt-1">{t.nama}</p>
-                          <p className="text-[11px] text-slate-400 mt-0.5">
-                            {t.customer?.full_name && `${t.customer.full_name} · `}
-                            {formatDateTime(t.created_at)} · {formatRupiah(t.harga)}
-                          </p>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-sm font-semibold">
+                            {t.kode}
+                          </span>
+                          <span className={cfg.className}>{cfg.label}</span>
                         </div>
+                        <p className="text-sm text-slate-600 mt-1">{t.nama}</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          {t.customer?.full_name &&
+                            `${t.customer.full_name} · `}
+                          {formatDateTime(t.created_at)} ·{" "}
+                          {formatRupiah(t.harga)}
+                        </p>
+                      </div>
                     </div>
                     {siap && t.customer?.phone && (
                       <button
-                      onClick={() => {
-                        window.open(linkWa(t.customer.phone, templateSiap(t)), '_blank')
-                        toast.info(
-                          'WhatsApp terbuka di tab baru',
-                          'Tinggal tekan kirim -- pesannya sudah diisi otomatis.',
-                        )
-                      }}
+                        onClick={() => {
+                          window.open(
+                            linkWa(t.customer.phone, templateSiap(t)),
+                            "_blank",
+                          );
+                          toast.info(
+                            "WhatsApp terbuka di tab baru",
+                            "Tinggal tekan kirim -- pesannya sudah diisi otomatis.",
+                          );
+                        }}
                         className="btn-primary w-full mt-3 text-xs py-2"
                       >
                         <MessageCircle className="h-3.5 w-3.5" />
-                        Kabari {t.customer.full_name?.split(' ')[0]} via WhatsApp
+                        Kabari {t.customer.full_name?.split(" ")[0]} via
+                        WhatsApp
                       </button>
                     )}
                   </div>
-                )
+                );
               })}
             </div>
           </>
@@ -353,8 +416,9 @@ export default function DropPointPage() {
       <p className="text-[11px] text-slate-500 flex items-start gap-1.5">
         <MessageCircle className="h-3.5 w-3.5 flex-shrink-0 mt-px" />
         Notifikasi WhatsApp tetap semi-manual: tombol di atas membuka WhatsApp
-        dengan teks yang sudah disiapkan. Kamu tetap menekan tombol kirim di sana.
+        dengan teks yang sudah disiapkan. Kamu tetap menekan tombol kirim di
+        sana.
       </p>
     </div>
-  )
+  );
 }
