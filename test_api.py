@@ -605,6 +605,84 @@ if tokens.get("customer"):
 
 
 # =============================================================
+section("19. Ganti pengerja & komisi per role (admin mengerjakan sendiri = 0)")
+
+# Id-butuh: admin login, teknisi dummy, dan satu layanan master.
+admin_id = (
+    main.supabase.from_("profiles").select("id").eq("phone", "628980570911").execute().data[0]["id"]
+)
+if "admin" in tokens and admin_id and client_tech_id:
+    layanan = client.get("/api/sepatu").json()
+    r = client.post(
+        "/api/transaksi",
+        headers=admin_h,
+        json={
+            "user_id": main.supabase.from_("profiles").select("id").eq("phone", "628981000001").execute().data[0]["id"],
+            "shoe_id": layanan[0]["id"],
+        },
+    )
+    ok = r.status_code == 201
+    check("admin buat transaksi uji", ok, f"HTTP {r.status_code} {str(r.text)[:90]}")
+    if ok:
+        trx = r.json()
+        trx_id = trx["id"]
+
+        # Tanpa pengerja saat lahir -> komisi 0, bukan komisi menggantung.
+        check("transaksi baru tanpa teknisi -> komisi 0", trx.get("tech_commission") == 0,
+              f"komisi={trx.get('tech_commission')}")
+
+        # Titip id konsumen sebagai pengerja harus ditolak (400), bukan disimpan.
+        cust_id = main.supabase.from_("profiles").select("id").eq("phone", "628981000001").execute().data[0]["id"]
+        r = client.put(f"/api/transaksi/{trx_id}", headers=admin_h, json={"tech_id": cust_id})
+        check("pengerja ber-role konsumen ditolak 400", r.status_code == 400, f"HTTP {r.status_code}")
+
+        # Admin menandai dirinya sendiri -> komisi 0 walau harga sudah ada.
+        r = client.put(f"/api/transaksi/{trx_id}", headers=admin_h, json={"tech_id": admin_id})
+        ok = r.status_code == 200
+        check("admin assign diri sendiri", ok, f"HTTP {r.status_code} {str(r.text)[:90]}")
+        if ok:
+            check("  -> komisi admin sendiri = 0", r.json().get("tech_commission") == 0,
+                  f"komisi={r.json().get('tech_commission')}")
+            check("  -> tech_id terpasang ke admin", r.json().get("tech_id") == admin_id)
+
+        # Final harga saat pengerja = admin: komisi tetap 0.
+        harga_final = int(trx.get("harga") or 0)
+        if harga_final:
+            r = client.put(f"/api/transaksi/{trx_id}/harga", headers=admin_h, json={"harga": harga_final})
+            ok = r.status_code == 200
+            check("final harga saat pengerja admin", ok, f"HTTP {r.status_code} {str(r.text)[:90]}")
+            if ok:
+                check("  -> komisi tetap 0 setelah final harga", r.json().get("tech_commission") == 0,
+                      f"komisi={r.json().get('tech_commission')}")
+
+        # Ganti ke teknisi biasa -> komisi hidup lagi, sesuai persen aktif.
+        r = client.put(f"/api/transaksi/{trx_id}", headers=admin_h, json={"tech_id": client_tech_id})
+        ok = r.status_code == 200
+        check("reassign ke teknisi", ok, f"HTTP {r.status_code} {str(r.text)[:90]}")
+        if ok and harga_final:
+            harapan = main.calculate_commission(harga_final)
+            check("  -> komisi teknisi = potongan standard", r.json().get("tech_commission") == harapan,
+                  f"komisi={r.json().get('tech_commission')}, harapan={harapan}")
+
+        # Kosongkan pengerja -> komisi nol lagi.
+        r = client.put(f"/api/transaksi/{trx_id}", headers=admin_h, json={"tech_id": ""})
+        ok = r.status_code == 200
+        check("kosongkan pengerja via tech_id=''", ok, f"HTTP {r.status_code} {str(r.text)[:90]}")
+        if ok:
+            check("  -> komisi kembali 0", r.json().get("tech_commission") == 0,
+                  f"komisi={r.json().get('tech_commission')}")
+            check("  -> tech_id jadi null", r.json().get("tech_id") is None,
+                  f"tech_id={r.json().get('tech_id')}")
+
+        # Rapikan: transaksi uji dihapus supaya staging tidak berantakan.
+        main.supabase.from_("transactions").delete().eq("id", trx_id).execute()
+        sisa = main.supabase.from_("transactions").select("id").eq("id", trx_id).execute().data
+        check("transaksi uji dibersihkan", not sisa, f"masih ada {len(sisa)}")
+else:
+    check("prasyarat seksi 19 tersedia", False, "login admin / id teknisi / id admin kurang")
+
+
+# =============================================================
 print("\n" + "=" * 52)
 print(f"HASIL: {passed} lulus, {failed} gagal")
 print("=" * 52)

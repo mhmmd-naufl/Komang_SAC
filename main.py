@@ -599,6 +599,41 @@ def calculate_commission(harga: int) -> int:
     """Hitung komisi teknisi (default 40%) dari harga terpasang."""
     return int(harga * TECHNICIAN_COMMISSION_PERCENT / 100)
 
+
+def komisi_untuk(harga: int, tech_id: Optional[str]) -> int:
+    """
+    Komisi berdasarkan SIAPA yang dinyatakan mengerjakan.
+
+    Aturan pemilik:
+    - tech_id kosong -> 0. Tidak ada pengerja yang digaji, jadi tidak ada
+      yang berhak atas potongannya; omzet penuh milik outlet.
+    - Pengerja ber-role ADMIN -> 0. "Khusus admin tidak ada potongan 40%":
+      kalau pemilik mengerjakan sendiri, hasilnya utuh.
+    - Pengerja ber-role technician -> potongan standard
+      (TECHNICIAN_COMMISSION_PERCENT).
+
+    Role selalu dibaca dari profiles di sisi server, bukan dikirim klien --
+    kalau kirim dari klien, siapa pun bisa mengimplikasikan dirinya admin
+    dan komisinya jadi 0. Id yang hilang (profiling dihapus) dihitung 0,
+    bukan menyimpan komisi menggantung tanpa penerima.
+    """
+    if not tech_id:
+        return 0
+    cari = (
+        supabase.from_("profiles")
+        .select("role")
+        .eq("id", tech_id)
+        .execute()
+        .data
+        or []
+    )
+    peran = (cari[0].get("role") if cari else "") or ""
+    if peran == "technician":
+        return calculate_commission(harga)
+    # Selain technician (admin, drop_point, customer, profil hilang) -> 0.
+    # Satu jalur penolakan untuk semuanya: tidak ada cara menitip komisi.
+    return 0
+
 def get_now_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -1810,7 +1845,7 @@ def create_transaksi(request: Request, transaksi: TransactionCreate, user: dict 
         data["grup_id"] = None
 
     data["status"] = "Diterima"
-    data["tech_commission"] = calculate_commission(data["harga"])
+    data["tech_commission"] = komisi_untuk(data["harga"], data.get("tech_id"))
     data["kode"] = generate_tracking_code()
     data["created_at"] = get_now_iso()
 
@@ -2203,8 +2238,11 @@ def update_transaksi_harga(
     """
     Admin-only: tetapkan harga final satu transaksi.
 
-    Menghitung ulang tech_commission (50% dari harga final) karena komisi
-    dihitung saat transaksi dibuat dari harga awal yang bisa lebih rendah.
+    Menghitung ulang tech_commission dari harga final, memakai aturan
+    komisi-berdasarkan-peran: teknisi biasa kena potongan standard
+    (default 40%), admin yang dinyatakan mengerjakan sendiri kena 0 --
+    sehingga mengganti pengerja sebelum final harga tidak meninggalkan
+    komisi yang tak sesuai.
 
     Ditolak kalau status sudah "Siap diambil": harga saat itu sudah dikunci
     karena pembeli sudah mengambil barang, dan perubahan diam-diam akan
@@ -2216,7 +2254,7 @@ def update_transaksi_harga(
     existing = (
         supabase.from_("transactions")
         .select(
-            "id, status, defect_notes, "
+            "id, status, tech_id, defect_notes, "
             "shoe:shoes(merk, model, harga_min, harga_max)"
         )
         .eq("id", transaksi_id)
@@ -2246,7 +2284,7 @@ def update_transaksi_harga(
 
     data = {
         "harga": update.harga,
-        "tech_commission": calculate_commission(update.harga),
+        "tech_commission": komisi_untuk(update.harga, current.get("tech_id")),
         "updated_at": get_now_iso(),
     }
     # Catatan alasan disimpan di defect_notes, bukan kolom baru, supaya
@@ -2286,7 +2324,17 @@ def update_transaksi(
     update: TransaksiUpdate,
     user: dict = Depends(get_current_user),
 ):
-    """Admin-only. Update field transaksi (misalnya reassign teknisi)."""
+    """
+    Admin-only. Ganti field transaksi — utamanya reassign pengerja:
+
+    - tech_id    : id teknisi, atau id admin untuk opsi "admin mengerjakan
+                   sendiri" (komisi 0 — tanpa potongan 40%).
+    - tech_id="" : ikat tanpa pengerja (komisi juga nol).
+
+    Komisi dihitung ulang otomatis setiap kali pengerja diganti; peran
+    diverifikasi di server supaya tidak ada id yang memalsuan dirinya
+    sebagai technician.
+    """
     if user["role"] != "admin":
         raise HTTPException(403, "Hanya admin yang bisa mengubah transaksi")
 
@@ -2296,15 +2344,35 @@ def update_transaksi(
 
     data = {}
     if update.tech_id is not None and update.tech_id != "":
-        tech = supabase.from_("profiles").select("id").eq("id", update.tech_id).execute()
+        tech = (
+            supabase.from_("profiles")
+            .select("id, role")
+            .eq("id", update.tech_id)
+            .execute()
+        )
         if not tech.data:
             raise HTTPException(400, "Teknisi tidak ditemukan")
+        # Hanya technician/admin yang boleh jadi pengerja. Tanpa ini,
+        # id drop_point/konsumen bisa ditempel ke transaksi dan komisi
+        # dihitung untuk orang yang tidak pernah mengerjakan apa pun.
+        if tech.data[0]["role"] not in ("technician", "admin"):
+            raise HTTPException(400, "Pengerja harus teknisi atau admin")
         data["tech_id"] = update.tech_id
     elif update.tech_id == "":
         data["tech_id"] = None
 
     if not data:
         raise HTTPException(400, "Tidak ada field yang diupdate")
+
+    # Pengerja baru = komisi baru. Ini penting dua arah: menandai admin
+    # sebagai pengerja harus batal-kan potongan yang tersimpan dari
+    # teknisi sebelumnya, dan sebaliknya, mengganti teknisi setelah admin
+    # bekerja sendiri harus menghidupkan kembali komisinya.
+    # Dasar perhitungan: harga final kalau sudah ditetapkan, kalau belum,
+    # harga awal yang tercatat (biasanya harga_min master).
+    if "tech_id" in data:
+        harga_kini = existing.data[0].get("harga") or 0
+        data["tech_commission"] = komisi_untuk(harga_kini, data["tech_id"])
 
     data["updated_at"] = get_now_iso()
     result = supabase.from_("transactions").update(data).eq("id", transaksi_id).execute()

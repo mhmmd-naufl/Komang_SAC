@@ -7,8 +7,10 @@ import {
   Loader2,
   MessageCircle,
   MessageSquare,
+  UserCog,
   Wallet,
 } from 'lucide-react'
+import { useAuth } from '../../contexts/AuthContext'
 import { useCariTunda, useTabel } from '../../hooks/useTabel'
 import { ambilSemua, unduhCsv } from '../../utils/csv'
 import { cn, adaRentang, formatDateTime, formatRupiah, getStatusConfig } from '../../utils/helpers'
@@ -130,6 +132,49 @@ export default function AdminTransaksi() {
       batal = true
     }
   }, [])
+
+  // ------------------------------------------------------------------
+  // Ganti pengerja satu transaksi (fitur admin):
+  //   - pilih teknisi mana pun, komisi dihitung ulang backend (40%)
+  //   - pilih "admin mengerjakan sendiri" -> komisi 0 (tanpa potongan)
+  //   - pilih "Tanpa teknisi" -> komisi 0 juga, omzet utuh milik outlet
+  // Nilai yang benar selalu ditetapkan backend; UI hanya menyopir pilihan.
+  // ------------------------------------------------------------------
+  const { user: adminLogin } = useAuth()
+  const [gantiTech, setGantiTech] = useState(null)
+  const [pilihanTeknisi, setPilihanTeknisi] = useState('')
+  const [simpanGanti, setSimpanGanti] = useState(false)
+
+  const bukaGantiTeknisi = (t) => {
+    setGantiTech(t.id)
+    setPilihanTeknisi(t.tech?.id || '')
+  }
+
+  const tutupGantiTeknisi = () => {
+    setGantiTech(null)
+    setSimpanGanti(false)
+  }
+
+  const simpanTeknisi = async (id) => {
+    if (simpanGanti) return
+    setSimpanGanti(true)
+    try {
+      await transactionsApi.update(id, { tech_id: pilihanTeknisi })
+      const namaBaru =
+        pilihanTeknisi === ''
+          ? 'Tanpa teknisi'
+          : pilihanTeknisi === adminLogin?.id
+            ? 'Admin mengerjakan sendiri'
+            : teknisi.find((tg) => tg.id === pilihanTeknisi)?.full_name || 'teknisi'
+      toast.success('Pengerja diperbarui', `${namaBaru} — komisi dihitung ulang otomatis.`)
+      tabel.muatUlang()
+      setGantiTech(null)
+    } catch (err) {
+      toast.error('Gagal mengganti pengerja', err.friendlyMessage || err.message)
+    } finally {
+      setSimpanGanti(false)
+    }
+  }
 
   // Cerminan filter untuk tombol reset dan label "ada filter aktif".
   const adaFilter =
@@ -275,8 +320,61 @@ export default function AdminTransaksi() {
                     {t.shoe?.jenis_treatment ? ` \u00b7 ${t.shoe.jenis_treatment}` : ''}
                   </p>
                 </td>
-                <td className="px-4 py-3 text-slate-600">
-                  {t.tech?.full_name || <span className="text-amber-600">Belum ditugaskan</span>}
+                <td className="px-4 py-3">
+                  {gantiTech === t.id ? (
+                    <div className="w-56 space-y-1.5">
+                      <select
+                        value={pilihanTeknisi}
+                        onChange={(e) => setPilihanTeknisi(e.target.value)}
+                        disabled={simpanGanti}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 outline-none focus:border-primary-400"
+                        aria-label={`Pilih pengerja untuk ${t.kode || 'transaksi'}`}
+                      >
+                        <option value="">Tanpa teknisi (komisi 0)</option>
+                        {adminLogin?.id && (
+                          <option value={adminLogin.id}>
+                            Admin mengerjakan sendiri (komisi 0)
+                          </option>
+                        )}
+                        {teknisi.map((tg) => (
+                          <option key={tg.id} value={tg.id}>
+                            {tg.full_name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => simpanTeknisi(t.id)}
+                          disabled={simpanGanti}
+                          className="px-2 py-1 rounded-lg bg-primary-600 text-white text-xs font-medium hover:bg-primary-700 disabled:opacity-50"
+                        >
+                          {simpanGanti ? 'Menyimpan...' : 'Simpan'}
+                        </button>
+                        <button
+                          onClick={tutupGantiTeknisi}
+                          className="px-2 py-1 rounded-lg text-xs text-slate-500 hover:bg-slate-100"
+                        >
+                          Batal
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      {t.tech?.full_name ? (
+                        <span className="text-slate-600">{t.tech.full_name}</span>
+                      ) : (
+                        <span className="text-amber-600">Belum ditugaskan</span>
+                      )}
+                      <button
+                        onClick={() => bukaGantiTeknisi(t)}
+                        className="p-1 rounded-lg text-slate-300 hover:bg-primary-50 hover:text-primary-600"
+                        title="Ganti pengerja"
+                        aria-label={`Ganti pengerja untuk ${t.kode || 'transaksi ini'}`}
+                      >
+                        <UserCog className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   <span className={cfg.className}>{cfg.label}</span>
@@ -329,7 +427,8 @@ export default function AdminTransaksi() {
         <div>
           <h2 className="text-xl font-bold text-slate-900">Transaksi</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Semua transaksi cuci beserta nilai dan komisi teknisi (40% dari harga daftar).
+            Semua transaksi cuci beserta nilai. Komisi mengikuti siapa yang ditandai
+            mengerjakan: teknisi kena potongan standard, admin yang mengerjakan sendiri tanpa potongan.
           </p>
         </div>
         <button onClick={jalankanEkspor} className="btn-secondary shrink-0" disabled={ekspor}>
@@ -508,8 +607,9 @@ function Foto({ label, url, wajib }) {
  * Layanan ber-harga-rentang (Repaint 80.000-150.000) dicatat dari harga
  * terendah saat pelanggan booking. Angka itu belum final -- Dickson di outlet
  * baru bisa dilihat setelah barangnya ada di tangan teknisi. Bagian ini
- * mengubahnya, dan backend otomatis menghitung ulang komisi teknisi karena
- * komisi selalu 40% dari harga yang berlaku.
+ * mengubahnya, dan backend otomatis menghitung ulang komisi mengikuti
+ * siapa yang ditandai mengerjakan: teknisi kena potongan standard,
+ * admin yang mengerjakan sendiri tanpa potongan.
  *
  * Sengaja TIDAK ditampilkan kalau status sudah "Siap diambil": barang sudah
  * diambil, uang sudah masuk, dan mengubah harga saat itu membuat laporan
@@ -697,7 +797,7 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
           <div className="divide-y divide-slate-100 rounded-xl border border-slate-100 px-4">
             <Baris label="Harga jual" nilai={formatRupiah(t.harga)} />
             <Baris
-              label="Komisi teknisi (40%)"
+              label="Komisi pengerja (teknisi 40%, admin 0)"
               nilai={formatRupiah(t.tech_commission)}
             />
             <Baris
