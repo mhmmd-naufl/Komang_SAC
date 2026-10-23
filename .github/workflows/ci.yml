@@ -83,21 +83,24 @@ jobs:
           echo "Aman: folder privat/ tidak ada di repo."
 
   # ------------------------------------------------------------------
-  # Backend + database Supabase.
+  # Backend + database Supabase CI (STAGING).
   #
-  # HANYA jalan kalau secret sudah diisi di:
+  # Database produksi TIDAK PERNAH disentuh CI. Uji ini dijalankan
+  # terhadap proyek Supabase kedua (staging) yang datanya bebas diacak:
   #   Settings > Secrets and variables > Actions > New repository secret
-  #     SUPABASE_SERVICE_ROLE_KEY  (wajib)
-  #     JWT_SECRET_KEY             (wajib)
-  #     SUPABASE_URL                (opsional, ada default)
+  #     CI_SUPABASE_URL                 (wajib, URL proyek staging)
+  #     CI_SUPABASE_SERVICE_ROLE_KEY     (wajib, service key staging)
+  #     JWT_SECRET_KEY                   (wajib, secret dev untuk JWT)
   #
-  # Kalau secret belum ada, step ini di-skip -- bukan gagal. Jadi repo
-  # tetap hijau untuk fork yang tidak punya akses ke database.
+  # Kalau secret belum ada, job ini di-skip -- bukan gagal. Jadi repo
+  # tetap hijau meski staging belum disiapkan.
   #
-  # Catatan: test_api.py hanya MEMBACA (login + fetch). Tidak menulis.
+  # Alur: isi data dummy (seed_dummy.py) -> cek schema & proteksi ->
+  # uji endpoint -> reset data dummy. Uji kembali databersih untuk run
+  # berikutnya dan tidak meninggalkan akun dummy bertahun-tahun.
   # ------------------------------------------------------------------
   backend-tests:
-    name: Backend (audit auth + uji endpoint)
+    name: Backend (audit auth + uji endpoint @ staging)
     runs-on: ubuntu-latest
     # Jangan jalan untuk pull request dari luar: menghemat menit runner
     # dan repo fork tidak punya akses ke database.
@@ -116,40 +119,44 @@ jobs:
       - name: Install dependency
         run: pip install -r requirements.txt
 
-      - name: Cek apakah secret database tersedia
+      - name: Cek apakah secret database CI tersedia
         id: gate
         env:
-          SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SERVICE_KEY: ${{ secrets.CI_SUPABASE_SERVICE_ROLE_KEY }}
+          DB_URL: ${{ secrets.CI_SUPABASE_URL }}
           JWT_KEY: ${{ secrets.JWT_SECRET_KEY }}
         run: |
-          if [ -n "$SERVICE_KEY" ] && [ -n "$JWT_KEY" ]; then
+          if [ -n "$SERVICE_KEY" ] && [ -n "$JWT_KEY" ] && [ -n "$DB_URL" ]; then
             echo "has_secrets=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_secrets=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Test database dilewati::Secret SUPABASE_SERVICE_ROLE_KEY / JWT_SECRET_KEY belum diisi di Settings > Secrets and variables > Actions. Test endpoint tidak dijalankan."
+            echo "::notice title=Test database dilewati::Secret CI_SUPABASE_URL / CI_SUPABASE_SERVICE_ROLE_KEY / JWT_SECRET_KEY belum diisi di Settings > Secrets and variables > Actions. Test endpoint tidak dijalankan."
           fi
 
       - name: Siapkan environment dari secret
         if: steps.gate.outputs.has_secrets == 'true'
         env:
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SERVICE_ROLE_KEY }}
           JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          BUSINESS_NAME: ${{ secrets.BUSINESS_NAME }}
-          BUSINESS_PHONE: ${{ secrets.BUSINESS_PHONE }}
+          SUPABASE_URL: ${{ secrets.CI_SUPABASE_URL }}
         run: |
           umask 077
           {
             echo "SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}"
             echo "JWT_SECRET_KEY=${JWT_SECRET_KEY}"
-            echo "SUPABASE_URL=${SUPABASE_URL:-https://cssajztordwhsqaonzgn.supabase.co}"
-            # Info bisnis bersifat opsional: kalau secret-nya diisi, test_api.py
-            # ikut memeriksa nomor WA tidak kosong. Kalau kosong, test tetap
-            # jalan -- yang diuji hanya kontraknya, bukan konfigurasi deploy.
-            echo "BUSINESS_NAME=${BUSINESS_NAME:-Komang SAC}"
-            echo "BUSINESS_PHONE=${BUSINESS_PHONE}"
+            # Tidak ada fallback URL. Kalau secret ini tidak diisi, job
+            # seharusnya melapor di gate -- bukan diam-diam menembak
+            # database produksi.
+            echo "SUPABASE_URL=${SUPABASE_URL}"
           } > .env
           echo "File .env dibuat sementara (tidak masuk git)."
+
+      # Data dummy diisi HANYA di database staging CI. Jangan arahkan
+      # CI_SUPABASE_* ke proyek produksi: script ini memasukkan akun
+      # dan transaksi test ke database yang ditunjuknya.
+      - name: Isi data dummy (staging CI)
+        if: steps.gate.outputs.has_secrets == 'true'
+        run: python seed_dummy.py
 
       - name: Cek kolom database
         if: steps.gate.outputs.has_secrets == 'true'
@@ -162,6 +169,12 @@ jobs:
       - name: Uji endpoint + RBAC
         if: steps.gate.outputs.has_secrets == 'true'
         run: python test_api.py
+
+      - name: Reset data dummy (staging CI)
+        # always(): kalau test gagal, staging tetap dibersihkan dari akun
+        # dummy supaya run berikutnya tidak menambah data dua kali.
+        if: always() && steps.gate.outputs.has_secrets == 'true'
+        run: python seed_dummy.py --reset
 
       - name: Ringkasan
         if: steps.gate.outputs.has_secrets == 'true'

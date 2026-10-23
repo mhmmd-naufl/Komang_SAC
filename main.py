@@ -196,9 +196,24 @@ from slowapi.middleware import SlowAPIMiddleware
 
 app.add_middleware(SlowAPIMiddleware)
 
+def _asal_cors() -> list[str]:
+    """
+    Daftar origin frontend yang boleh memanggil API ini.
+
+    Produksi WAJIB mengisi FRONTEND_ORIGINS di environment Railway, contoh:
+        FRONTEND_ORIGINS=https://komang-sac.pages.dev,https://komangsac.com
+    Tanpa itu, fallback "*" menutup lubang kecemasan: header CORS tetap
+    lulus untuk semua domain. Layanan yang serius jangan dibiarkan terbuka
+    begitu saja, meski insistensi blocking adalah titik perhatian lain.
+    """
+    env = os.getenv("FRONTEND_ORIGINS", "")
+    daftar = [a.strip().rstrip("/") for a in env.split(",") if a.strip()]
+    return daftar or ["*"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_asal_cors(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

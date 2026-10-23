@@ -55,3 +55,6 @@ Thumbs.db
 # sendiri, tidak ikut ter-commit. Folder tetap ada di disk -- hanya
 # diabaikan oleh git.
 Rentalyzer/
+
+# Backup database (berisi hash password & data pelanggan) - jangan pernah di-commit
+backup_komangsac_*.json
