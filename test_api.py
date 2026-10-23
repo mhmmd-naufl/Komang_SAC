@@ -742,6 +742,89 @@ else:
 
 
 # =============================================================
+section("21. Ganti layanan transaksi (salah treatment di web)")
+
+if tokens.get("admin") and admin_id:
+    layanan = client.get("/api/sepatu").json()
+    if len(layanan) >= 2:
+        awal, ganti = layanan[0], layanan[-1]
+        if awal["id"] == ganti["id"]:
+            # Pricelist hanya satu baris? Pakai dua-duanya saja untuk uji.
+            ganti = awal
+        dasar_baru = ganti.get("harga_min") or ganti["harga_cuci"]
+
+        r = client.post(
+            "/api/transaksi",
+            headers=admin_h,
+            json={
+                "user_id": main.supabase.from_("profiles").select("id").eq("phone", "628981000001").execute().data[0]["id"],
+                "shoe_id": awal["id"],
+            },
+        )
+        if r.status_code == 201:
+            trx_id = r.json()["id"]
+            check("transaksi uji dibuat", True)
+
+            # Teknisi tidak boleh mengganti layanan -- urusan harga/layanan
+            # adalah domain admin.
+            r = client.put(f"/api/transaksi/{trx_id}", headers=tech_h, json={"shoe_id": ganti["id"]})
+            check("teknisi tidak boleh ganti layanan", r.status_code in (401, 403), f"HTTP {r.status_code}")
+
+            # Admin ganti layanan -> harga reset ke master baru, komisi tetap
+            # cocok (tanpa pengerja -> 0).
+            r = client.put(f"/api/transaksi/{trx_id}", headers=admin_h, json={"shoe_id": ganti["id"]})
+            ok = r.status_code == 200
+            check("admin ganti layanan", ok, f"HTTP {r.status_code} {str(r.text)[:90]}")
+            if ok:
+                check("  -> harga ikut master layanan baru", r.json().get("harga") == dasar_baru,
+                      f"harga={r.json().get('harga')}, dasar={dasar_baru}")
+                check("  -> shoe_id berubah", r.json().get("shoe_id") == ganti["id"])
+
+            # Ganti layanan + pengerja sekaligus: dasar harga dari layanan
+            # baru, siapa yang berhak dari pengerja baru.
+            if ok:
+                r = client.put(
+                    f"/api/transaksi/{trx_id}",
+                    headers=admin_h,
+                    json={"shoe_id": awal["id"], "tech_id": client_tech_id},
+                )
+                if r.status_code == 200:
+                    dasar_awal = awal.get("harga_min") or awal["harga_cuci"]
+                    check("ganti layanan + pengerja sekaligus", True)
+                    harapan = main.calculate_commission(dasar_awal)
+                    check("  -> harga dasar layanan baru", r.json().get("harga") == dasar_awal,
+                          f"harga={r.json().get('harga')} vs {dasar_awal}")
+                    check("  -> komisi dari harga layanan baru x pengerja baru",
+                          r.json().get("tech_commission") == harapan,
+                          f"komisi={r.json().get('tech_commission')}, harapan={harapan}")
+                else:
+                    check("ganti layanan + pengerja sekaligus", False, f"HTTP {r.status_code}")
+
+            # Master ngawur ditolak, string kosong ditolak.
+            r = client.put(f"/api/transaksi/{trx_id}", headers=admin_h,
+                           json={"shoe_id": "00000000-0000-0000-0000-000000000000"})
+            check("layanan tak dikenal ditolak", r.status_code in (400, 404), f"HTTP {r.status_code}")
+            r = client.put(f"/api/transaksi/{trx_id}", headers=admin_h, json={"shoe_id": ""})
+            check("layanan kosong ditolak", r.status_code == 400, f"HTTP {r.status_code}")
+
+            # Status "Siap diambil" = uang sudah masuk: layanan terkunci.
+            main.supabase.from_("transactions").update(
+                {"status": "Siap diambil"}
+            ).eq("id", trx_id).execute()
+            r = client.put(f"/api/transaksi/{trx_id}", headers=admin_h, json={"shoe_id": ganti["id"]})
+            check("ganti layanan saat Siap diambil ditolak 400", r.status_code == 400,
+                  f"HTTP {r.status_code} {str(r.text)[:90]}")
+
+            main.supabase.from_("transactions").delete().eq("id", trx_id).execute()
+        else:
+            check("buat transaksi uji (seksi 21)", False, f"HTTP {r.status_code} {str(r.text)[:90]}")
+    else:
+        check("pricelist punya >= 2 layanan", False, f"cuma {len(client.get('/api/sepatu').json())}")
+else:
+    check("prasyarat seksi 21", False, "token admin / id teknisi tidak ada")
+
+
+# =============================================================
 print("\n" + "=" * 52)
 print(f"HASIL: {passed} lulus, {failed} gagal")
 print("=" * 52)

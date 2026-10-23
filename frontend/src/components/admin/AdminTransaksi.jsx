@@ -7,6 +7,7 @@ import {
   Loader2,
   MessageCircle,
   MessageSquare,
+  Repeat,
   UserCog,
   Wallet,
 } from 'lucide-react'
@@ -14,7 +15,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import { useCariTunda, useTabel } from '../../hooks/useTabel'
 import { ambilSemua, unduhCsv } from '../../utils/csv'
 import { cn, adaRentang, formatDateTime, formatRupiah, getStatusConfig } from '../../utils/helpers'
-import { transactionsApi, usersApi } from '../../services/api'
+import { transactionsApi, usersApi, shoesApi } from '../../services/api'
 import { toast } from '../Toast'
 import Pagination from '../Pagination'
 import Modal, { Field, GagalMuat, Kosong, Memuat, SearchInput } from '../AdminUi'
@@ -639,7 +640,10 @@ function FinalisasiHarga({ transaksi, onTersimpan }) {
     setSimpan(true)
     try {
       const { data } = await transactionsApi.setHarga(t.id, angka, alasan.trim() || undefined)
-      toast.success('Harga final disimpan', `Komisi teknisi dihitung ulang jadi ${formatRupiah(Math.floor(angka * 0.4))}.`)
+      toast.success(
+        'Harga final disimpan',
+        `Komisi pengerja dihitung ulang jadi ${formatRupiah(data.tech_commission || 0)}.`,
+      )
       setTerbuka(false)
       setAlasan('')
       onTersimpan(data)
@@ -704,6 +708,169 @@ function FinalisasiHarga({ transaksi, onTersimpan }) {
             <button onClick={kirim} disabled={simpan} className="btn-primary text-sm px-3 py-2">
               {simpan && <Loader2 className="h-4 w-4 animate-spin" />}
               Simpan
+            </button>
+            <button
+              onClick={() => {
+                setTerbuka(false)
+                setError('')
+              }}
+              disabled={simpan}
+              className="btn-secondary text-sm px-3 py-2"
+            >
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Ganti layanan/varian pada transaksi (fitur admin).
+ *
+ * Kasus nyata: konsumen memilih treatment yang salah saat booking di web,
+ * lalu barang yang datang ternyata dikhususkan untuk layanan lain. Admin
+ * pilih layanan yang benar dari pricelist, lalu backend yang menentukan
+ * harganya -- harga di-reset mengikuti master layanan baru (rentang kembali
+ * ke harga terendah sampai harga difinalkan lagi) dan komisi pengerja
+ * dihitung ulang. Uang tidak pernah dari UI; UI hanya menyopir pilihan.
+ *
+ * Dikunci di status "Siap diambil": barang sudah diambil, pembayaran sudah
+ * final, dan backend menolaknya juga.
+ */
+function GantiLayanan({ transaksi, onTersimpan }) {
+  const [terbuka, setTerbuka] = useState(false)
+  const [daftarLayanan, setDaftarLayanan] = useState([])
+  const [muatDaftar, setMuatDaftar] = useState(false)
+  const [pilihan, setPilihan] = useState('')
+  const [simpan, setSimpan] = useState(false)
+  const [error, setError] = useState('')
+
+  const t = transaksi
+  if (t.status === 'Siap diambil') return null
+
+  const buka = async () => {
+    setTerbuka(true)
+    setPilihan('')
+    setError('')
+    setMuatDaftar(true)
+    try {
+      const res = await shoesApi.list({ aktif_only: true })
+      // Kelompokkan per nama layanan supaya admin tidak menelusuri 24 baris
+      // master untuk menemukan varian yang benar.
+      const map = new Map()
+      for (const s of res.data || []) {
+        const kunci = s.jenis_treatment || s.merk || 'Layanan'
+        if (!map.has(kunci)) map.set(kunci, [])
+        map.get(kunci).push(s)
+      }
+      setDaftarLayanan(
+        [...map.entries()].map(([grup, varian]) => ({
+          grup,
+          varian: [...varian].sort((a, b) =>
+            (a.harga_cuci ?? 0) - (b.harga_cuci ?? 0) ||
+            String(a.model || '').localeCompare(String(b.model || '')),
+          ),
+        })),
+      )
+    } catch (err) {
+      setError(err.friendlyMessage || err.message)
+    } finally {
+      setMuatDaftar(false)
+    }
+  }
+
+  const kirim = async () => {
+    if (!pilihan) {
+      setError('Pilih layanan yang benar lebih dulu')
+      return
+    }
+    if (pilihan === t.shoe_id) {
+      setError('Layanan itu sudah tercatat pada transaksi ini')
+      return
+    }
+    setError('')
+    setSimpan(true)
+    try {
+      const { data } = await transactionsApi.update(t.id, { shoe_id: pilihan })
+      toast.success(
+        'Layanan diganti',
+        'Harga mengikuti master layanan baru; tetapkan harga final kalau layanannya ber-rentang.',
+      )
+      setTerbuka(false)
+      onTersimpan(data)
+    } catch (err) {
+      setError(err.friendlyMessage || err.message)
+    } finally {
+      setSimpan(false)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+            <Repeat className="h-4 w-4 text-primary-600" />
+            Salah pilih layanan?
+          </p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Ganti layanan/varian di sini -- harga langsung mengikuti pricelist layanan baru dan
+            komisi pengerja dihitung ulang.
+          </p>
+        </div>
+        {!terbuka && (
+          <button onClick={buka} className="btn-secondary text-sm px-3 py-2 shrink-0">
+            Ganti Layanan
+          </button>
+        )}
+      </div>
+
+      {terbuka && (
+        <div className="mt-4 space-y-3">
+          <Field
+            label="Layanan yang benar"
+            required
+            error={error}
+            hint="Yang tertulis di pricelist outlet, bukan dari pilihan konsumen di web."
+          >
+            {muatDaftar ? (
+              <div className="flex items-center gap-2 text-sm text-slate-500 py-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Memuat daftar layanan...
+              </div>
+            ) : (
+              <select
+                value={pilihan}
+                onChange={(e) => setPilihan(e.target.value)}
+                className="input"
+                aria-label="Layanan yang benar"
+              >
+                <option value="">-- pilih layanan --</option>
+                {daftarLayanan.map((g) => (
+                  <optgroup key={g.grup} label={g.grup}>
+                    {g.varian.map((v) => (
+                      <option key={v.id} value={v.id} disabled={v.id === t.shoe_id}>
+                        {v.model || v.merk} -- {formatRupiah(v.harga_cuci)}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            )}
+          </Field>
+
+          <p className="text-xs text-slate-500">
+            Sekarang tercatat: {t.shoe?.merk || '—'} {t.shoe?.model || ''} ({formatRupiah(t.harga)}).
+            Setelah diganti, harga kembali ke harga dasar layanan baru -- tetapkan harga final
+            kalau rentangnya lebar.
+          </p>
+
+          <div className="flex gap-2">
+            <button onClick={kirim} disabled={simpan || muatDaftar} className="btn-primary text-sm px-3 py-2">
+              {simpan && <Loader2 className="h-4 w-4 animate-spin" />}
+              Simpan Layanan
             </button>
             <button
               onClick={() => {
@@ -807,6 +974,7 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
           </div>
           <div className="mt-3">
             <FinalisasiHarga transaksi={t} onTersimpan={onTersimpan} />
+            <GantiLayanan transaksi={t} onTersimpan={onTersimpan} />
           </div>
         </div>
 

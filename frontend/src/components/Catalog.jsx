@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { ChevronDown, Footprints, X } from 'lucide-react'
-import { formatRupiah, hargaLayanan, cn } from '../utils/helpers'
+import { formatRupiah, cn } from '../utils/helpers'
 import { shoesApi } from '../services/api'
 
 // Logo biru sebagai default image untuk layanan

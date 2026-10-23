@@ -2317,6 +2317,10 @@ def update_transaksi_harga(
 # ----------------------------------------------------------------
 class TransaksiUpdate(BaseModel):
     tech_id: Optional[str] = None
+    # Ganti layanan/varian (kasus "konsumen salah milih treatment di web"):
+    # id master shoes yang benar. Harga di-reset dari master baru, komisi
+    # ikut dihitung ulang -- bukan angka yang dikirim klien.
+    shoe_id: Optional[str] = None
 
 @app.put("/api/transaksi/{transaksi_id}", response_model=TransactionResponse, tags=["Transaksi"])
 def update_transaksi(
@@ -2325,15 +2329,20 @@ def update_transaksi(
     user: dict = Depends(get_current_user),
 ):
     """
-    Admin-only. Ganti field transaksi — utamanya reassign pengerja:
+    Admin-only. Ganti field transaksi:
 
     - tech_id    : id teknisi, atau id admin untuk opsi "admin mengerjakan
-                   sendiri" (komisi 0 — tanpa potongan 40%).
+                   sendiri" (komisi 0 -- tanpa potongan 40%).
     - tech_id="" : ikat tanpa pengerja (komisi juga nol).
+    - shoe_id    : ganti layanan/varian ke master yang benar (kasus konsumen
+                   salah memilih di web). Harga di-reset dari layanan baru
+                   -- rentang dicatat dari harga terendah, finalnya lagi
+                   lewat /harga -- dan komisi dihitung ulang.
 
-    Komisi dihitung ulang otomatis setiap kali pengerja diganti; peran
-    diverifikasi di server supaya tidak ada id yang memalsuan dirinya
-    sebagai technician.
+    Semua bergantian dihitung ulang di server; peran dan harga tidak pernah
+    percaya klien. Ganti layanan ditolak kalau status sudah "Siap diambil":
+    uang sudah masuk, perubahan diam-diam akan membuat laporan pendapatan
+    tidak cocok dengan realita -- aturan yang sama dengan ganti harga final.
     """
     if user["role"] != "admin":
         raise HTTPException(403, "Hanya admin yang bisa mengubah transaksi")
@@ -2361,18 +2370,44 @@ def update_transaksi(
     elif update.tech_id == "":
         data["tech_id"] = None
 
+    if update.shoe_id is not None and update.shoe_id != "":
+        if existing.data[0].get("status") == "Siap diambil":
+            raise HTTPException(
+                400,
+                "Transaksi sudah Siap diambil -- harga sudah dikunci karena "
+                "barang sudah diambil. Pembayaran tidak bisa diganti diam-diam.",
+            )
+        layanan = (
+            supabase.from_("shoes")
+            .select("id, harga_cuci, harga_min, status")
+            .eq("id", update.shoe_id)
+            .execute()
+        )
+        if not layanan.data:
+            raise HTTPException(400, "Layanan tidak ditemukan")
+        master = layanan.data[0]
+        if not master["status"]:
+            raise HTTPException(400, "Layanan ini sedang tidak tersedia")
+        data["shoe_id"] = update.shoe_id
+        # Aturan harga yang sama dengan booking: layanan ber-rentang dicatat
+        # dari harga terendah sampai admin menetapkan harga final.
+        data["harga"] = master.get("harga_min") or master["harga_cuci"]
+    elif update.shoe_id == "":
+        raise HTTPException(400, "Layanan tidak boleh kosong")
+
     if not data:
         raise HTTPException(400, "Tidak ada field yang diupdate")
 
-    # Pengerja baru = komisi baru. Ini penting dua arah: menandai admin
-    # sebagai pengerja harus batal-kan potongan yang tersimpan dari
-    # teknisi sebelumnya, dan sebaliknya, mengganti teknisi setelah admin
-    # bekerja sendiri harus menghidupkan kembali komisinya.
-    # Dasar perhitungan: harga final kalau sudah ditetapkan, kalau belum,
-    # harga awal yang tercatat (biasanya harga_min master).
-    if "tech_id" in data:
-        harga_kini = existing.data[0].get("harga") or 0
-        data["tech_commission"] = komisi_untuk(harga_kini, data["tech_id"])
+    # Komisi selalu digandingkan dengan kondisi terkini:
+    # - ganti pengerja  -> hitung ulang komisi dari harga yang ada;
+    # - ganti layanan   -> harga dasarnya ikut master baru dulu, baru
+    #                     komisinya dihitung dari harga itu;
+    # - dua-duanya      -> layanan baru menentukan dasar harga, pengerja
+    #                     baru menentukan siapa berhak atas komisinya.
+    if "tech_id" in data or "shoe_id" in data:
+        harga_dasar = data.get("harga") or (existing.data[0].get("harga") or 0)
+        pengerja_kini = data.get("tech_id", existing.data[0].get("tech_id"))
+        data["tech_commission"] = komisi_untuk(harga_dasar, pengerja_kini)
 
     data["updated_at"] = get_now_iso()
     result = supabase.from_("transactions").update(data).eq("id", transaksi_id).execute()
