@@ -13,6 +13,16 @@ import React from "react"
 export default function Modal({ open, onClose, title, description, children, footer, lebar = "max-w-lg" }) {
   const dialogRef = useRef(null)
 
+  // onClose disimpan di ref supaya effect di bawah hanya bergantung pada
+  // `open`. Tanpa ini, setiap render parent (misalnya tiap ketikan di form
+  // modal) membuat identitas onClose berubah, effect jalan ulang, dan fokus
+  // dipaksa lompat ke input pertama -- gejalanya "harus dipencet tiap
+  // ngetik 1 huruf". Escape pun tetap memanggil callback terbaru.
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+
   useEffect(() => {
     if (!open) return undefined
 
@@ -27,7 +37,7 @@ export default function Modal({ open, onClose, title, description, children, foo
     }, 60)
 
     const onKey = (e) => {
-      if (e.key === "Escape") onClose()
+      if (e.key === "Escape") onCloseRef.current()
     }
     window.addEventListener("keydown", onKey)
 
@@ -36,7 +46,7 @@ export default function Modal({ open, onClose, title, description, children, foo
       document.body.style.overflow = overflowAwal
       window.removeEventListener("keydown", onKey)
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 

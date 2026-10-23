@@ -17,19 +17,26 @@ export default function LogoutConfirm({ open, onClose }) {
   const { user, logout } = useAuth()
   const tombolKeluarRef = useRef(null)
 
+  // onClose lewat ref: effect hanya bergantung pada `open`, bukan identitas
+  // callback yang berubah tiap render (pola yang sama dengan Modal AdminUi).
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+
   useEffect(() => {
     if (!open) return undefined
     // Fokuskan tombol utama supaya Enter langsung jalan tanpa perlu klik dulu.
     const t = setTimeout(() => tombolKeluarRef.current?.focus(), 60)
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') onCloseRef.current()
     }
     window.addEventListener('keydown', onKey)
     return () => {
       clearTimeout(t)
       window.removeEventListener('keydown', onKey)
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 
