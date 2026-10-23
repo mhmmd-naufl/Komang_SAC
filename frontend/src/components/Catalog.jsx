@@ -68,7 +68,7 @@ export default function Catalog({ onSelectShoe }) {
 
   const tampil = useMemo(() => {
     if (!grup) return []
-    return shoes.filter((s) => (s.kelompok || '').trim() === grup)
+    return Array.isArray(shoes) ? shoes.filter((s) => (s.kelompok || '').trim() === grup) : []
   }, [shoes, grup])
 
   /**

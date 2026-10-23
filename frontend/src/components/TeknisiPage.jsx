@@ -248,9 +248,9 @@ export default function TeknisiPage() {
     const q = cari.trim().toLowerCase();
     const cocok = (t) => !q || (t.kode || "").toLowerCase().includes(q);
 
-    if (filter === "tersedia") return tersedia.filter(cocok);
-    if (filter === "semua") return transaksi.filter(cocok);
-    return transaksi.filter((t) => t.status === filter && cocok(t));
+    if (filter === "tersedia") return Array.isArray(tersedia) ? tersedia.filter(cocok) : [];
+    if (filter === "semua") return Array.isArray(transaksi) ? transaksi.filter(cocok) : [];
+    return Array.isArray(transaksi) ? transaksi.filter((t) => t.status === filter && cocok(t)) : [];
   }, [transaksi, tersedia, filter, cari]);
 
   /** Nama sepatu dari katalog. Kalau katalog belum termuat, tampilkan kode pendek. */

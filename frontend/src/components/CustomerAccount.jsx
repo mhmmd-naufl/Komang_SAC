@@ -92,7 +92,10 @@ export default function CustomerAccount() {
     )
   }, [daftar, cari])
 
-  const berjalan = useMemo(() => daftar.filter((t) => !SELESAI.includes(t.status)), [daftar])
+  const berjalan = useMemo(() => {
+    if (!Array.isArray(daftar)) return []
+    return daftar.filter((t) => !SELESAI.includes(t.status))
+  }, [daftar])
   const aktif = useMemo(
     () => berjalan.find((t) => t.status === 'Siap diambil') || berjalan[0],
     [berjalan]
