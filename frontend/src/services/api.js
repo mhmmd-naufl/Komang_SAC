@@ -1,7 +1,18 @@
 import axios from "axios";
 
+// Port backend Komang SAC = 8001 (port 8000 dipakai aplikasi lain).
+// Kosongkan VITE_API_BASE_URL kalau mau memakai proxy Vite (/api -> :8001).
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8001";
+
+export const TOKEN_KEY = "komang_sac_token";
+
+/** Ambil token valid dari localStorage, atau null kalau tidak ada / rusak. */
+function ambilToken() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token || token === "null" || token === "undefined") return null;
+  return token;
+}
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -9,42 +20,38 @@ export const api = axios.create({
   timeout: 15000,
 });
 
-export const TOKEN_KEY = "komang_sac_token";
-
+// Interceptor Request: tempel token ke SETIAP request.
+// Token "null"/"undefined" (string) dianggap tidak ada, header tidak dikirim.
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  const token = ambilToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
   return config;
 });
 
+// Interceptor Response: handle error
 api.interceptors.response.use(
   (res) => res,
   (error) => {
     const status = error.response?.status;
-
-    // 401 = token hilang/kedaluwarsa. Jangan reset otomatis saat halaman
-    // login mengirim kredensial salah, hanya kalau memang ada token tersimpan.
     if (status === 401 && localStorage.getItem(TOKEN_KEY)) {
+      console.warn("⚠️ Token expired/tidak valid, logout...");
       localStorage.removeItem(TOKEN_KEY);
       if (!window.location.pathname.startsWith("/login")) {
         window.location.href = "/login";
       }
     }
-
-    // Jadikan pesan backend mudah dibaca di UI
     error.friendlyMessage =
       error.response?.data?.detail ||
       (error.code === "ERR_NETWORK"
         ? "Backend tidak dapat dihubungi. Pastikan server FastAPI berjalan."
         : error.message);
-
     return Promise.reject(error);
   },
 );
 
-/* ------------------------------------------------------------------ */
-
-/** Konfigurasi publik: info bisnis + metode bayar yang diterima outlet. */
+// API Modules
 export const configApi = {
   get: () => api.get("/api/config"),
 };
@@ -69,24 +76,30 @@ export const transactionsApi = {
   get: (id) => api.get(`/api/transaksi/${id}`),
   available: () => api.get("/api/transaksi/tersedia"),
   claim: (id) => api.post(`/api/transaksi/${id}/claim`),
-  /** Cek status pakai nomor tracking (KS-XXXXXX) — endpoint publik */
   tracking: (kode) =>
     api.get(`/api/transaksi/tracking/${encodeURIComponent(kode)}`),
-  /** Semua pasang dalam satu booking multi-pasang — endpoint publik */
-  grup: (grupId) => api.get(`/api/transaksi/grup/${encodeURIComponent(grupId)}`),
+  grup: (grupId) =>
+    api.get(`/api/transaksi/grup/${encodeURIComponent(grupId)}`),
   create: (data) => api.post("/api/transaksi", data),
+
+  // Update status transaksi
   updateStatus: (id, data) => api.put(`/api/transaksi/${id}/status`, data),
+
+  // Update field lain (ganti teknisi, layanan, catatan)
   update: (id, data) => api.put(`/api/transaksi/${id}`, data),
-  /** Admin-only. Finalisasi harga untuk layanan ber-harga-rentang. */
+
+  // Finalisasi harga (admin)
   setHarga: (id, harga, alasan) =>
     api.put(`/api/transaksi/${id}/harga`, { harga, alasan }),
-  /** Upload foto transaksi. */
+
+  // Upload foto. Header multipart wajib: default instance adalah JSON, dan
+  // axios 1.x akan mengubah FormData jadi JSON kalau header itu terpasang.
   uploadPhoto: (id, jenis, file) => {
     const formData = new FormData();
-    formData.append('jenis', jenis);
-    formData.append('file', file);
+    formData.append("jenis", jenis);
+    formData.append("file", file);
     return api.post(`/api/transaksi/${id}/photo`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+      headers: { "Content-Type": "multipart/form-data" },
     });
   },
 };
@@ -97,17 +110,8 @@ export const usersApi = {
   create: (data) => api.post("/api/users", data),
   createWithPassword: (data) => api.post("/api/users/with-password", data),
   update: (id, data) => api.put(`/api/users/${id}`, data),
-  /**
-   * Admin mengganti password pengguna lain. Ini jalur pemulihan akses termurah
-   * dan tanpa layanan tambahan: konsumen lupa password -> admin setel ulang.
-   */
   resetPassword: (id, password) =>
     api.post(`/api/users/${id}/reset-password`, { password }),
-  /**
-   * Hapus akun secara permanen. Backend menolak kalau akun masih tertulis
-   * pada transaksi mana pun sebagai pembeli atau pengerja, jadi UI cukup
-   * menyampaikan pesan errornya apa adanya.
-   */
   hapus: (id) => api.delete(`/api/users/${id}`),
 };
 
@@ -127,10 +131,8 @@ export const stockApi = {
     api.post(`/api/stock/${id}/kurangi`, null, { params: { jumlah } }),
 };
 
-/** Pengeluaran operasional (listrik, PDAM, dll.). Semua admin-only. */
 export const expensesApi = {
   list: (params) => api.get("/api/expenses", { params }),
-  /** Total per minggu (Senin–Minggu WIB), 8 minggu terakhir. */
   rekapMingguan: () => api.get("/api/expenses/rekap-mingguan"),
   create: (data) => api.post("/api/expenses", data),
   update: (id, data) => api.put(`/api/expenses/${id}`, data),
@@ -138,36 +140,16 @@ export const expensesApi = {
 };
 
 export const statsApi = {
-  /**
-   * Statistik dashboard untuk satu periode.
-   *
-   * Param `periode` menentukan juga resolusi grafik: 'bulan' -> per hari,
-   * 'tahun' -> per bulan, 'semua' -> per bulan. Nilanya dikirim apa adanya
-   * sebagai angka (bukan string ISO) supaya batas periode dihitung backend
-   * di zona WIB, sama dengan tempat bucket harian/bulanan dihitung.
-   */
   admin: (params) => api.get("/api/stats/admin", { params }),
   dashboard: (params) => api.get("/api/dashboard", { params }),
 };
 
-/**
- * Ringkasan + saran (AI) beserta fakta deterministik untuk grafik.
- * Admin-only di backend.
- */
 export const analyticsApi = {
   summary: (params, config) =>
     api.get("/api/analytics/summary", { params, ...config }),
 };
 
-/* ------------------------------------------------------------------ */
-/* PAGINASI                                                           */
-/* ------------------------------------------------------------------ */
-/*
- * Backend mengembalikan JSON list biasa (supaya konsumen lama tidak bongkar)
- * dan menaruh jumlah total di header X-Total-Count / X-Total-Pages.
- * expose_headers di main.py yang membuat header ini terbaca di browser.
- */
-
+// Pagination helpers
 export const HALAMAN_DEFAULT = 25;
 export const OPSI_PER_HALAMAN = [10, 25, 50, 100];
 
@@ -178,23 +160,12 @@ const KE_HEADER = {
   perHalaman: "x-per-page",
 };
 
-/** Ubah string header jadi number, dengan fallback kalau header tidak ada. */
 function angkaHeader(headers, kunci, fallback) {
   const mentah = headers?.[KE_HEADER[kunci]];
   const n = Number.parseInt(mentah, 10);
   return Number.isFinite(n) ? n : fallback;
 }
 
-/**
- * Panggil endpoint daftar dan kembalikan `{ rows, total, totalHalaman, halaman }`
- * di samping respons Axios asli (yang tetap dikembalikan sebagai-is, jadi
- * `res.data` dan `res.headers` tetap bisa dipakai).
- *
- * Backend melakukan clamp halaman: kalau `halaman` di luar jangkauan, server
- * mengirim halaman terakhir yang valid. Nilai itu ikut dikembalikan lewat
- * `halaman` supaya tombol paginasi ikut lompat ikut benar -- bukan menampilkan
- * "halaman 99" yang kosong.
- */
 export async function ambilBerpaginan(
   path,
   { halaman = 1, perHalaman = HALAMAN_DEFAULT, ...params } = {},
@@ -202,10 +173,8 @@ export async function ambilBerpaginan(
   const res = await api.get(path, {
     params: { ...params, page: halaman, per_page: perHalaman },
   });
-
   const rows = Array.isArray(res.data) ? res.data : [];
   const perHalamanEfektif = angkaHeader(res.headers, "perHalaman", perHalaman);
-
   return Object.assign(res, {
     rows,
     total: angkaHeader(res.headers, "total", rows.length),

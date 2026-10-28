@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
+  ArrowRight,
+  Camera,
+  Check,
   Download,
   Eye,
   ImageOff,
@@ -8,6 +11,7 @@ import {
   MessageCircle,
   MessageSquare,
   Repeat,
+  SkipForward,
   UserCog,
   Wallet,
 } from 'lucide-react'
@@ -19,9 +23,8 @@ import { transactionsApi, usersApi, shoesApi } from '../../services/api'
 import { toast } from '../Toast'
 import Pagination from '../Pagination'
 import Modal, { Field, GagalMuat, Kosong, Memuat, SearchInput } from '../AdminUi'
-
+import PanelProsesAdmin from './AdminPanelProcess'
 const STATUS = ['Diterima', 'Diproses', 'Diperiksa', 'Selesai', 'Siap diambil']
-
 const URUT = [
   { nilai: 'terbaru', label: 'Terbaru' },
   { nilai: 'terlama', label: 'Terlama' },
@@ -32,11 +35,11 @@ const URUT = [
 const KOLOM_CSV = [
   { judul: 'Kode', kunci: 'kode' },
   { judul: 'Tanggal Masuk', kunci: 'created_at', nilai: (t) => formatDateTime(t.created_at) },
-  // Tanggal selesai dicatat teknisi saat status jadi Selesai. Kolom ini yang
-  // dipakai buat hitung omzet per bulan/tahun, jadi harus ikut diekspor --
-  // tanpa itu, laporan yang dihitung ulang dari CSV tidak akan cocok dengan
-  // yang tampil di dashboard.
-  { judul: 'Tanggal Selesai', kunci: 'selesai_at', nilai: (t) => (t.selesai_at ? formatDateTime(t.selesai_at) : '') },
+  {
+    judul: 'Tanggal Selesai',
+    kunci: 'selesai_at',
+    nilai: (t) => (t.selesai_at ? formatDateTime(t.selesai_at) : ''),
+  },
   { judul: 'Pelanggan', nilai: (t) => t.customer?.full_name || '' },
   { judul: 'No. WhatsApp Pelanggan', nilai: (t) => t.customer?.phone || '' },
   { judul: 'Layanan', nilai: (t) => t.shoe?.merk || '' },
@@ -49,7 +52,11 @@ const KOLOM_CSV = [
   { judul: 'Komisi Teknisi', kunci: 'tech_commission', nilai: (t) => t.tech_commission ?? '' },
   { judul: 'Catatan Konsumen', kunci: 'catatan_konsumen', nilai: (t) => t.catatan_konsumen || '' },
   { judul: 'Catatan Teknisi', kunci: 'defect_notes', nilai: (t) => t.defect_notes || '' },
-  { judul: 'Diperbarui', kunci: 'updated_at', nilai: (t) => (t.updated_at ? formatDateTime(t.updated_at) : '') },
+  {
+    judul: 'Diperbarui',
+    kunci: 'updated_at',
+    nilai: (t) => (t.updated_at ? formatDateTime(t.updated_at) : ''),
+  },
 ]
 
 /** Bangun tautan wa.me. Nomor harus tanpa tanda +, spasi, atau tanda hubung. */
@@ -60,28 +67,25 @@ export function tautanWa(nomor, pesan) {
 }
 
 /**
- * Satu pesan WhatsApp yang berisi pemberitahuan "sudah siap diambil" SEKALIGUS
- * invoice. Ini satu-satunya jalur invoice ke pelanggan.
- *
- * Halaman konsumen sengaja tidak punya tombol cetak/unduh invoice: panel
- * admin yang-trigger saat status sudah "Siap diambil", supaya tidak ada dua
- * versi invoice yang berbeda (satu dicetak pelanggan, satu dikirim admin) dan
- * pelanggan tidak bisa punya nota sebelum harga-nya benar.
- *
- * Format teks polos (bukan PDF) supaya bisa langsung ditempel dan dibaca di HP
- * apa pun tanpa layanan tambahan.
- */
+Satu pesan WhatsApp yang berisi pemberitahuan "sudah siap diambil" SEKALIGUS
+invoice. Ini satu-satunya jalur invoice ke pelanggan.
+Halaman konsumen sengaja tidak punya tombol cetak/unduh invoice: panel
+admin yang-trigger saat status sudah "Siap diambil", supaya tidak ada dua
+versi invoice yang berbeda (satu dicetak pelanggan, satu dikirim admin) dan
+pelanggan tidak bisa punya nota sebelum harga-nya benar.
+Format teks polos (bukan PDF) supaya bisa langsung ditempel dan dibaca di HP
+apa pun tanpa layanan tambahan.
+*/
 export function pesanWa(t) {
   const nama = t.customer?.full_name?.trim() || ''
   const layanan = [t.shoe?.merk, t.shoe?.model].filter(Boolean).join(' ') || 'Cuci sepatu'
   const metode = String(t.payment_method || '').replace(/_/g, ' ').trim()
-
   return [
     `Halo${nama ? ` ${nama}` : ''},`,
     '',
     `Pesanan *${t.kode || '-'}* sudah siap diambil.`,
     '',
-    '*Invoice*',
+    'Invoice',
     `Layanan: ${layanan}`,
     `Harga: ${formatRupiah(t.harga)}`,
     ...(metode ? [`Pembayaran: ${metode.toUpperCase()}`] : []),
@@ -93,12 +97,11 @@ export function pesanWa(t) {
 }
 
 /**
- * Invoice hanya boleh dikirim saat barang sudah siap diambil.
- *
- * Fungsi ini satu-satunya penentu tombolnya, dipakai bersama oleh daftar dan
- * modal detail -- supaya tidak mungkin tombolnya muncul di tabel tapi tidak
- * di modal (atau sebaliknya).
- */
+Invoice hanya boleh dikirim saat barang sudah siap diambil.
+Fungsi ini satu-satunya penentu tombolnya, dipakai bersama oleh daftar dan
+modal detail -- supaya tidak mungkin tombolnya muncul di tabel tapi tidak
+di modal (atau sebaliknya).
+*/
 export function bisaKirimInvoice(t) {
   return t?.status === 'Siap diambil' && Boolean(t?.customer?.phone)
 }
@@ -107,7 +110,6 @@ export default function AdminTransaksi() {
   const tabel = useTabel({ endpoint: '/api/transaksi' })
   const { setFilter } = tabel
   const [cari, setCari] = useCariTunda(setFilter)
-
   const [statusAktif, setStatusAktif] = useState('')
   const [teknisiAktif, setTeknisiAktif] = useState('')
   const [urutAktif, setUrutAktif] = useState('terbaru')
@@ -115,10 +117,10 @@ export default function AdminTransaksi() {
   const [sampai, setSampai] = useState('')
   const [detail, setDetail] = useState(null)
   const [ekspor, setEkspor] = useState(false)
+
   // Daftar teknisi hanya untuk isi dropdown filter. Gagal memuat di sini bukan
   // masalah fatal: filter teknisi hilang, tapi tabel tetap bisa dipakai.
   const [teknisi, setTeknisi] = useState([])
-
   useEffect(() => {
     let batal = false
     usersApi
@@ -150,12 +152,10 @@ export default function AdminTransaksi() {
     setGantiTech(t.id)
     setPilihanTeknisi(t.tech?.id || '')
   }
-
   const tutupGantiTeknisi = () => {
     setGantiTech(null)
     setSimpanGanti(false)
   }
-
   const simpanTeknisi = async (id) => {
     if (simpanGanti) return
     setSimpanGanti(true)
@@ -165,8 +165,8 @@ export default function AdminTransaksi() {
         pilihanTeknisi === ''
           ? 'Tanpa teknisi'
           : pilihanTeknisi === adminLogin?.id
-            ? 'Admin mengerjakan sendiri'
-            : teknisi.find((tg) => tg.id === pilihanTeknisi)?.full_name || 'teknisi'
+          ? 'Admin mengerjakan sendiri'
+          : teknisi.find((tg) => tg.id === pilihanTeknisi)?.full_name || 'teknisi'
       toast.success('Pengerja diperbarui', `${namaBaru} — komisi dihitung ulang otomatis.`)
       tabel.muatUlang()
       setGantiTech(null)
@@ -249,10 +249,8 @@ export default function AdminTransaksi() {
         toast.warning('Tidak ada data', 'Tidak ada transaksi yang cocok dengan filter ini.')
         return
       }
-
       const cap = new Date().toISOString().slice(0, 10)
       unduhCsv(`transaksi-komang-sac-${cap}`, KOLOM_CSV, hasil.baris)
-
       if (hasil.terpotong) {
         toast.warning(
           'Ekspor dipotong',
@@ -280,11 +278,13 @@ export default function AdminTransaksi() {
           ? 'Tidak ada transaksi yang cocok dengan kata kunci, status, teknisi, atau rentang tanggal ini.'
           : 'Transaksi muncul di sini begitu pelanggan menyewa jasa cuci.'
       }
-      action={adaFilter && (
-        <button onClick={resetSemua} className="btn-secondary mt-1">
-          Reset filter
-        </button>
-      )}
+      action={
+        adaFilter && (
+          <button onClick={resetSemua} className="btn-secondary mt-1">
+            Reset filter
+          </button>
+        )
+      }
     />
   ) : (
     <div className="overflow-x-auto">
@@ -318,7 +318,7 @@ export default function AdminTransaksi() {
                   <p className="text-slate-900">{t.shoe?.merk || '—'}</p>
                   <p className="text-xs text-slate-500">
                     {t.shoe?.model || ''}
-                    {t.shoe?.jenis_treatment ? ` \u00b7 ${t.shoe.jenis_treatment}` : ''}
+                    {t.shoe?.jenis_treatment ? ` · ${t.shoe.jenis_treatment}` : ''}
                   </p>
                 </td>
                 <td className="px-4 py-3">
@@ -333,9 +333,7 @@ export default function AdminTransaksi() {
                       >
                         <option value="">Tanpa teknisi (komisi 0)</option>
                         {adminLogin?.id && (
-                          <option value={adminLogin.id}>
-                            Admin mengerjakan sendiri (komisi 0)
-                          </option>
+                          <option value={adminLogin.id}>Admin mengerjakan sendiri (komisi 0)</option>
                         )}
                         {teknisi.map((tg) => (
                           <option key={tg.id} value={tg.id}>
@@ -442,13 +440,12 @@ export default function AdminTransaksi() {
         <div className="space-y-3 p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
             <div className="flex-1 sm:max-w-xs">
-            <SearchInput
-              value={cari}
-              onChange={setCari}
-              placeholder="Cari kode tracking (KS-XXXXXX)..."
-            />
-          </div>
-
+              <SearchInput
+                value={cari}
+                onChange={setCari}
+                placeholder="Cari kode tracking (KS-XXXXXX)..."
+              />
+            </div>
             <select
               value={statusAktif}
               onChange={(e) => gantiStatus(e.target.value)}
@@ -462,7 +459,6 @@ export default function AdminTransaksi() {
                 </option>
               ))}
             </select>
-
             {teknisi.length > 0 && (
               <select
                 value={teknisiAktif}
@@ -479,7 +475,6 @@ export default function AdminTransaksi() {
                 ))}
               </select>
             )}
-
             <select
               value={urutAktif}
               onChange={(e) => gantiUrut(e.target.value)}
@@ -492,14 +487,12 @@ export default function AdminTransaksi() {
                 </option>
               ))}
             </select>
-
             {adaFilter && (
               <button onClick={resetSemua} className="btn-ghost text-slate-500">
                 Reset
               </button>
             )}
           </div>
-
           <div className="flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
             <Field label="Dari tanggal" className="w-full sm:w-44">
               <input
@@ -529,9 +522,7 @@ export default function AdminTransaksi() {
             )}
           </div>
         </div>
-
         {isiTabel}
-
         <Pagination
           halaman={tabel.halaman}
           totalHalaman={tabel.totalHalaman}
@@ -545,6 +536,8 @@ export default function AdminTransaksi() {
 
       <DetailTransaksi
         transaksi={detail}
+        teknisiList={teknisi}
+        adminId={adminLogin?.id}
         onClose={() => setDetail(null)}
         onTersimpan={(trx) => {
           // Perbarui baris yang sedang dibuka supaya angka harga di detail ikut
@@ -558,7 +551,6 @@ export default function AdminTransaksi() {
 }
 
 /* ------------------------------------------------------------------ */
-
 function Baris({ label, nilai, className }) {
   return (
     <div className={cn('flex justify-between gap-4 py-2', className)}>
@@ -591,9 +583,7 @@ function Foto({ label, url, wajib }) {
           <ImageOff className="h-5 w-5" />
           <p className="text-xs">Belum ada foto</p>
           {wajib && (
-            <p className="text-[10px] leading-tight">
-              Wajib ada sebelum status Selesai
-            </p>
+            <p className="text-[10px] leading-tight">Wajib ada sebelum status Selesai</p>
           )}
         </div>
       )}
@@ -601,22 +591,22 @@ function Foto({ label, url, wajib }) {
   )
 }
 
+
 /* ------------------------------------------------------------------ */
 /* FINALISASI HARGA                                                    */
 /* ------------------------------------------------------------------ */
-/*
- * Layanan ber-harga-rentang (Repaint 80.000-150.000) dicatat dari harga
- * terendah saat pelanggan booking. Angka itu belum final -- Dickson di outlet
- * baru bisa dilihat setelah barangnya ada di tangan teknisi. Bagian ini
- * mengubahnya, dan backend otomatis menghitung ulang komisi mengikuti
- * siapa yang ditandai mengerjakan: teknisi kena potongan standard,
- * admin yang mengerjakan sendiri tanpa potongan.
- *
- * Sengaja TIDAK ditampilkan kalau status sudah "Siap diambil": barang sudah
- * diambil, uang sudah masuk, dan mengubah harga saat itu membuat laporan
- * pendapatan tidak cocok dengan realita. Backend juga menolak, jadi UI
- * duduk di depan aturan yang sama.
- */
+/**
+Layanan ber-harga-rentang (Repaint 80.000-150.000) dicatat dari harga
+terendah saat pelanggan booking. Angka itu belum final -- Dickson di outlet
+baru bisa dilihat setelah barangnya ada di tangan teknisi. Bagian ini
+mengubahnya, dan backend otomatis menghitung ulang komisi mengikuti
+siapa yang ditandai mengerjakan: teknisi kena potongan standard,
+admin yang mengerjakan sendiri tanpa potongan.
+Sengaja TIDAK ditampilkan kalau status sudah "Siap diambil": barang sudah
+diambil, uang sudah masuk, dan mengubah harga saat itu membuat laporan
+pendapatan tidak cocok dengan realita. Backend juga menolak, jadi UI
+duduk di depan aturan yang sama.
+*/
 function FinalisasiHarga({ transaksi, onTersimpan }) {
   const [terbuka, setTerbuka] = useState(false)
   const [harga, setHarga] = useState(String(transaksi.harga ?? ''))
@@ -727,18 +717,16 @@ function FinalisasiHarga({ transaksi, onTersimpan }) {
 }
 
 /**
- * Ganti layanan/varian pada transaksi (fitur admin).
- *
- * Kasus nyata: konsumen memilih treatment yang salah saat booking di web,
- * lalu barang yang datang ternyata dikhususkan untuk layanan lain. Admin
- * pilih layanan yang benar dari pricelist, lalu backend yang menentukan
- * harganya -- harga di-reset mengikuti master layanan baru (rentang kembali
- * ke harga terendah sampai harga difinalkan lagi) dan komisi pengerja
- * dihitung ulang. Uang tidak pernah dari UI; UI hanya menyopir pilihan.
- *
- * Dikunci di status "Siap diambil": barang sudah diambil, pembayaran sudah
- * final, dan backend menolaknya juga.
- */
+Ganti layanan/varian pada transaksi (fitur admin).
+Kasus nyata: konsumen memilih treatment yang salah saat booking di web,
+lalu barang yang datang ternyata dikhususkan untuk layanan lain. Admin
+pilih layanan yang benar dari pricelist, lalu backend yang menentukan
+harganya -- harga di-reset mengikuti master layanan baru (rentang kembali
+ke harga terendah sampai harga difinalkan lagi) dan komisi pengerja
+dihitung ulang. Uang tidak pernah dari UI; UI hanya menyopir pilihan.
+Dikunci di status "Siap diambil": barang sudah diambil, pembayaran sudah
+final, dan backend menolaknya juga.
+*/
 function GantiLayanan({ transaksi, onTersimpan }) {
   const [terbuka, setTerbuka] = useState(false)
   const [daftarLayanan, setDaftarLayanan] = useState([])
@@ -768,9 +756,10 @@ function GantiLayanan({ transaksi, onTersimpan }) {
       setDaftarLayanan(
         [...map.entries()].map(([grup, varian]) => ({
           grup,
-          varian: [...varian].sort((a, b) =>
-            (a.harga_cuci ?? 0) - (b.harga_cuci ?? 0) ||
-            String(a.model || '').localeCompare(String(b.model || '')),
+          varian: [...varian].sort(
+            (a, b) =>
+              (a.harga_cuci ?? 0) - (b.harga_cuci ?? 0) ||
+              String(a.model || '').localeCompare(String(b.model || '')),
           ),
         })),
       )
@@ -860,15 +849,17 @@ function GantiLayanan({ transaksi, onTersimpan }) {
               </select>
             )}
           </Field>
-
           <p className="text-xs text-slate-500">
             Sekarang tercatat: {t.shoe?.merk || '—'} {t.shoe?.model || ''} ({formatRupiah(t.harga)}).
             Setelah diganti, harga kembali ke harga dasar layanan baru -- tetapkan harga final
             kalau rentangnya lebar.
           </p>
-
           <div className="flex gap-2">
-            <button onClick={kirim} disabled={simpan || muatDaftar} className="btn-primary text-sm px-3 py-2">
+            <button
+              onClick={kirim}
+              disabled={simpan || muatDaftar}
+              className="btn-primary text-sm px-3 py-2"
+            >
               {simpan && <Loader2 className="h-4 w-4 animate-spin" />}
               Simpan Layanan
             </button>
@@ -889,7 +880,10 @@ function GantiLayanan({ transaksi, onTersimpan }) {
   )
 }
 
-function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
+/* ------------------------------------------------------------------ */
+/* DETAIL TRANSAKSI (MODAL)                                            */
+/* ------------------------------------------------------------------ */
+function DetailTransaksi({ transaksi, teknisiList, adminId, onClose, onTersimpan }) {
   if (!transaksi) return null
   const t = transaksi
   const cfg = getStatusConfig(t.status)
@@ -901,7 +895,9 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
       open
       onClose={onClose}
       title={`Transaksi ${t.kode || '(tanpa kode)'}`}
-      description={`Masuk ${formatDateTime(t.created_at)}${t.updated_at ? ` \u00b7 diperbarui ${formatDateTime(t.updated_at)}` : ''}`}
+      description={`Masuk ${formatDateTime(t.created_at)}${
+        t.updated_at ? ` · diperbarui ${formatDateTime(t.updated_at)}` : ''
+      }`}
       lebar="max-w-2xl"
       footer={
         <div className="flex flex-wrap gap-3">
@@ -925,16 +921,26 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
           </p>
         </div>
 
-        {/* Kenapa tombol invoice tidak ada. Tanpa ini admin bisa Centresaya
-            tombolnya hilang dan mengira ada bug. */}
+        {/* Kenapa tombol invoice tidak ada. Tanpa ini admin bisa curiga
+           tombolnya hilang dan mengira ada bug. */}
         {!wa && t.status !== 'Siap diambil' && (
           <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-800">
             <MessageSquare className="h-4 w-4 flex-shrink-0 mt-px" />
             <p>
-                Invoice dikirim bareng pengingat &ldquo;siap diambil&rdquo;, jadi tombolnya baru
+              Invoice dikirim bareng pengingat &ldquo;siap diambil&rdquo;, jadi tombolnya baru
               muncul setelah statusnya <strong>Siap diambil</strong>.
             </p>
           </div>
+        )}
+
+        {/* PANEL PROSES ADMIN -- hanya tampil untuk admin dan status belum final */}
+        {adminId && t.status !== 'Siap diambil' && (
+          <PanelProsesAdmin
+            transaksi={t}
+            teknisiList={teknisiList}
+            adminId={adminId}
+            onTersimpan={onTersimpan}
+          />
         )}
 
         <div className="grid gap-5 sm:grid-cols-2">
@@ -946,7 +952,6 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
               <Baris label="Catatan pelanggan" nilai={t.catatan_konsumen} />
             </div>
           </div>
-
           <div className="space-y-1">
             <p className="section-title mb-2">Layanan & Teknisi</p>
             <div className="divide-y divide-slate-100">
@@ -994,8 +999,8 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
               <div className="flex gap-3 rounded-xl bg-amber-50 p-4">
                 <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-sm font-semibold text-amber-900">Catatan teknisi</p>
-                  <p className="mt-1 text-sm text-amber-800">{t.defect_notes}</p>
+                  <p className="text-sm font-semibold text-amber-900">Catatan teknisi / admin</p>
+                  <p className="mt-1 text-sm text-amber-800 whitespace-pre-wrap">{t.defect_notes}</p>
                 </div>
               </div>
             )}
@@ -1012,7 +1017,7 @@ function DetailTransaksi({ transaksi, onClose, onTersimpan }) {
             <p className="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-xs text-amber-800">
               <Wallet className="h-4 w-4 shrink-0 mt-0.5" />
               Backend menolak status Selesai / Siap diambil selama foto sesudah masih kosong. Unggah
-              fotonya dari halaman Teknisi.
+              fotonya dari halaman Teknisi atau dari panel proses admin di atas.
             </p>
           )}
         </div>
