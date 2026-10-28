@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App.jsx'
 import './index.css'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
+import { queryClient } from './queryClient.js'
 
 // --- Error Boundary Component ---
 class ErrorBoundary extends React.Component {
@@ -59,12 +62,14 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-// --- Render App ---
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
       <ErrorBoundary>
-        <App />
+        <QueryClientProvider client={queryClient}>
+          <App />
+          <ReactQueryDevtools initialIsOpen={false} />
+        </QueryClientProvider>
       </ErrorBoundary>
     </BrowserRouter>
   </React.StrictMode>,
