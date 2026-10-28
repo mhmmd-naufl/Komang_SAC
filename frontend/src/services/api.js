@@ -1,5 +1,5 @@
 import axios from "axios";
-
+import { compressImage } from '../utils/compressImage';  
 // Port backend Komang SAC = 8001 (port 8000 dipakai aplikasi lain).
 // Kosongkan VITE_API_BASE_URL kalau mau memakai proxy Vite (/api -> :8001).
 const API_BASE_URL =
@@ -99,10 +99,11 @@ export const transactionsApi = {
 
   // Upload foto. Header multipart wajib: default instance adalah JSON, dan
   // axios 1.x akan mengubah FormData jadi JSON kalau header itu terpasang.
-  uploadPhoto: (id, jenis, file) => {
+  uploadPhoto: async (id, jenis, file) => {
+    const compressed = await compressImage(file);
     const formData = new FormData();
+    formData.append("file", compressed, "foto.jpg");
     formData.append("jenis", jenis);
-    formData.append("file", file);
     return api.post(`/api/transaksi/${id}/photo`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
     });
