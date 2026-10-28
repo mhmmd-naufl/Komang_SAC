@@ -1,10 +1,9 @@
-import React from 'react'
+import React, { lazy, Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App.jsx'
 import './index.css'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import { queryClient } from './queryClient.js'
 
 // --- Error Boundary Component ---
@@ -30,25 +29,25 @@ class ErrorBoundary extends React.Component {
           <p style={{ color: 'red', fontFamily: 'monospace' }}>
             {this.state.error?.message}
           </p>
-          <pre style={{ 
-            background: '#f0f0f0', 
-            padding: '1rem', 
-            overflow: 'auto', 
-            textAlign: 'left', 
-            maxWidth: '800px', 
+          <pre style={{
+            background: '#f0f0f0',
+            padding: '1rem',
+            overflow: 'auto',
+            textAlign: 'left',
+            maxWidth: '800px',
             margin: '1rem auto',
             fontSize: '12px'
           }}>
             {this.state.error?.stack}
           </pre>
-          <button 
+          <button
             onClick={() => window.location.reload()}
-            style={{ 
-              padding: '0.5rem 1rem', 
-              background: '#3b82f6', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '4px', 
+            style={{
+              padding: '0.5rem 1rem',
+              background: '#3b82f6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
               cursor: 'pointer',
               marginTop: '1rem'
             }}
@@ -62,15 +61,27 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// Devtools hanya dimuat saat dev. Di build produksi kondisi ini false,
+// jadi import dinamisnya dibuang dari bundle.
+const ReactQueryDevtools = import.meta.env.DEV
+  ? lazy(() =>
+      import('@tanstack/react-query-devtools').then((m) => ({
+        default: m.ReactQueryDevtools,
+      })),
+    )
+  : () => null
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <ErrorBoundary>
+    <ErrorBoundary>
+      <BrowserRouter>
         <QueryClientProvider client={queryClient}>
           <App />
-          <ReactQueryDevtools initialIsOpen={false} />
+          <Suspense fallback={null}>
+            <ReactQueryDevtools initialIsOpen={false} />
+          </Suspense>
         </QueryClientProvider>
-      </ErrorBoundary>
-    </BrowserRouter>
+      </BrowserRouter>
+    </ErrorBoundary>
   </React.StrictMode>,
 )
