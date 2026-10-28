@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Clock,
@@ -55,6 +56,14 @@ import { toast } from "./Toast";
  * Transaksi terbaru dan stok menipis SENGAJA tidak difilter periode: keduanya
  * adalah kondisi "sekarang", bukan hasil periode. Menampilkan transaksi
  * terbaru dari bulan lalu di bawah judul "Oktober 2026" hanya membingungkan.
+ *
+ * DATA FETCHING (TanStack Query):
+ *   - Tiga query inti (dashboard, transaksi terbaru, stok menipis) independen.
+ *   - Analytics dua fase: `fastQ` (fakta + grafik, tanpa AI) dan `aiQ` (narasi
+ *     AI). `aiQ` baru jalan setelah `fastQ` selesai (sukses ATAU gagal), jadi
+ *     grafik tidak pernah menunggu OpenRouter yang bisa 45 detik.
+ *   - Respons periode lama tidak bisa menimpa periode baru karena setiap
+ *     periode punya query key sendiri (menggantikan versiRef lama).
  */
 
 /** Angka yang selalu ada, biar tidak perlu optional-chaining di mana-mana. */
@@ -121,7 +130,10 @@ function PerformaTeknisi({ data, label }) {
       ),
     [data],
   );
-  const totalPekerjaan = baris.reduce((a, t) => a + (t.jumlah_pekerjaan || 0), 0);
+  const totalPekerjaan = baris.reduce(
+    (a, t) => a + (t.jumlah_pekerjaan || 0),
+    0,
+  );
   const totalKomisi = baris.reduce((a, t) => a + (t.tech_commission || 0), 0);
 
   return (
@@ -129,7 +141,8 @@ function PerformaTeknisi({ data, label }) {
       <div className="px-5 py-4 border-b border-slate-100">
         <h2 className="font-semibold text-slate-900">Performa Teknisi</h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Per {label} · diurutkan dari pekerjaan terbanyak · komisi 40% dari harga
+          Per {label} · diurutkan dari pekerjaan terbanyak · komisi 40% dari
+          harga
         </p>
       </div>
 
@@ -199,113 +212,127 @@ function PerformaTeknisi({ data, label }) {
 
 export default function AdminDashboard() {
   const [periode, setPeriode] = useState(() => periodeAwal());
-  const [loading, setLoading] = useState(true);
-  const [memuatAi, setMemuatAi] = useState(false);
-  const [error, setError] = useState(null);
-  const [errorAi, setErrorAi] = useState(null);
-  const [data, setData] = useState(null);
-  const [ai, setAi] = useState(null);
   const [modeGrafik, setModeGrafik] = useState("jumlah");
   const [mengekspor, setMengekspor] = useState("");
 
-  // Nomor versi permintaan. Respons lama (mis. narasi AI untuk periode
-  // sebelumnya) tidak boleh menimpa data periode yang sedang tampil.
-  const versiRef = useRef(0);
-
   // Parameter backend dihitung sekali per perubahan periode, lalu dipakai lagi
-  // oleh muat() dan oleh ekspor. Kalau dihitung di dua tempat, tidak ada
+  // oleh query dan oleh ekspor. Kalau dihitung di dua tempat, tidak ada
   // jaminan keduanya benar-benar sama -- dan laporan yang diekspor berbeda dari
   // yang tampil adalah kegagalan yang paling sulit dicari.
   const param = useMemo(() => keParameter(periode), [periode]);
   const label = useMemo(() => labelPeriode(periode), [periode]);
 
-  const muat = useCallback(
-    async (diam = false) => {
-      const versi = ++versiRef.current;
-      if (diam) setMemuatAi(true);
-      else setLoading(true);
-      setError(null);
-      try {
-        // Backend butuh `periode` eksplisit: tanpa itu, `bulan`/`tahun` diabaikan
-        // dan yang dihitung adalah SEMUA waktu (grafik jadi satu batang per
-        // bulan, mis. "Okt 2026", bukan rincian harian Oktober).
-        // Backend masih menerima satu bulan/tahun, jadi multi-select jatuh ke
-        // semua waktu.
-        const p = (param.bulan?.length === 1 && param.tahun?.length === 1)
-          ? { periode: 'bulan', bulan: param.bulan[0], tahun: param.tahun[0] }
-          : { periode: 'semua' };
-
-        // Core dashboard diambil dari endpoint gabungan supaya satu refresh
-        // hanya butuh satu panggilan untuk angka, grafik, dan stok kritis.
-        const [dashboard, trx, stock] = await Promise.all([
-          statsApi.admin(p),
-          transactionsApi.list({ limit: 8 }),
-          stockApi.list({ low_stock: true }),
-        ]);
-        if (versi !== versiRef.current) return;
-
-        setData({
-          ringkasan: dashboard?.data?.ringkasan || dashboard?.data || RINGKASAN_KOSONG,
-          terbaru: Array.isArray(trx.data) ? trx.data : [],
-          stok_menipis: Array.isArray(stock.data) ? stock.data : [],
-        });
-
-        // FASE 1 -- fakta & grafik tanpa AI. Ini yang mengisi chart; sengaja
-        // tidak menunggu OpenRouter, karena model gratis bisa 45 detik dan
-        // dulu membuat seluruh respons (termasuk fakta) kena timeout axios
-        // 15 detik sehingga grafik tampak kosong.
-        try {
-          const cepat = await analyticsApi.summary(
-            { ...p, pakai_ai: 0 },
-            { timeout: 20000 },
-          );
-          if (versi !== versiRef.current) return;
-          setAi(cepat.data);
-          setErrorAi(null);
-        } catch (errAi) {
-          if (versi !== versiRef.current) return;
-          setAi(null);
-          setErrorAi(errAi?.friendlyMessage || "Gagal memuat ringkasan.");
-        }
-
-        // FASE 2 -- narasi AI menyusul di latar belakang. Grafik sudah tampil
-        // dari fase 1; kalau AI gagal/lambat, cukup panel narasi yang
-        // menampilkan catatan, angka tetap utuh.
-        setMemuatAi(true);
-        analyticsApi
-          .summary({ ...p, pakai_ai: 1 }, { timeout: 60000 })
-          .then(({ data }) => {
-            if (versi !== versiRef.current) return;
-            setAi(data);
-            setErrorAi(null);
-          })
-          .catch((errAi) => {
-            if (versi !== versiRef.current) return;
-            setErrorAi(errAi?.friendlyMessage || "Ringkasan AI tidak tersedia.");
-          })
-          .finally(() => {
-            if (versi === versiRef.current) setMemuatAi(false);
-          });
-      } catch (err) {
-        if (versi !== versiRef.current) return;
-        // 403/401 = sesi tidak valid, biarkan interceptor yang tangani. Jadi
-        // di sini cuma error lain yang perlu ditampilkan, dan dashboard harus
-        // tetap tampil dengan angka nol -- layar kosong lebih buruk daripada
-        // angka yang jelas salah.
-        setError(err?.friendlyMessage || "Gagal memuat data dashboard.");
-        setErrorAi(null);
-      } finally {
-        if (versi === versiRef.current) setLoading(false);
-      }
-    },
+  // Backend butuh `periode` eksplisit: tanpa itu, `bulan`/`tahun` diabaikan
+  // dan yang dihitung adalah SEMUA waktu (grafik jadi satu batang per bulan,
+  // mis. "Okt 2026", bukan rincian harian Oktober).
+  // Backend masih menerima satu bulan/tahun, jadi multi-select jatuh ke
+  // semua waktu.
+  const p = useMemo(
+    () =>
+      param.bulan?.length === 1 && param.tahun?.length === 1
+        ? { periode: "bulan", bulan: param.bulan[0], tahun: param.tahun[0] }
+        : { periode: "semua" },
     [param],
   );
 
-  useEffect(() => {
-    muat();
-  }, [muat]);
+  /* ---------------------------------------------------------------- */
+  /* QUERY                                                             */
+  /* ---------------------------------------------------------------- */
 
-  const r = data?.ringkasan || RINGKASAN_KOSONG;
+  // Inti dashboard: tiga query independen, jadi satu yang gagal tidak
+  // menghalangi dua lainnya.
+  const dashboardQ = useQuery({
+    queryKey: ["admin", "dashboard", p],
+    queryFn: () => statsApi.admin(p),
+    select: (res) => res?.data?.ringkasan || res?.data || RINGKASAN_KOSONG,
+    staleTime: 30_000,
+  });
+
+  const trxQ = useQuery({
+    queryKey: ["transactions", "latest", 8],
+    queryFn: () => transactionsApi.list({ limit: 8 }),
+    select: (res) => (Array.isArray(res.data) ? res.data : []),
+    staleTime: 30_000,
+  });
+
+  const stockQ = useQuery({
+    queryKey: ["stock", { low_stock: true }],
+    queryFn: () => stockApi.list({ low_stock: true }),
+    select: (res) => (Array.isArray(res.data) ? res.data : []),
+    staleTime: 30_000,
+  });
+
+  // FASE 1 -- fakta & grafik tanpa AI. Ini yang mengisi chart; sengaja tidak
+  // menunggu OpenRouter, karena model gratis bisa 45 detik dan dulu membuat
+  // seluruh respons (termasuk fakta) kena timeout axios 15 detik sehingga
+  // grafik tampak kosong.
+  const fastQ = useQuery({
+    queryKey: ["analytics", "summary", p, { ai: false }],
+    queryFn: ({ signal }) =>
+      analyticsApi.summary({ ...p, pakai_ai: 0 }, { timeout: 20000, signal }),
+    select: (res) => res.data,
+    staleTime: 30_000,
+    retry: 1,
+  });
+
+  // FASE 2 -- narasi AI menyusul di latar belakang. Grafik sudah tampil dari
+  // fase 1; kalau AI gagal/lambat, cukup panel narasi yang menampilkan
+  // catatan, angka tetap utuh. `enabled` menunggu fase 1 selesai (sukses atau
+  // gagal), sama seperti alur berurutan sebelumnya.
+  const aiQ = useQuery({
+    queryKey: ["analytics", "summary", p, { ai: true }],
+    queryFn: ({ signal }) =>
+      analyticsApi.summary({ ...p, pakai_ai: 1 }, { timeout: 60000, signal }),
+    select: (res) => res.data,
+    enabled: !fastQ.isPending,
+    staleTime: 10 * 60_000, // output AI lambat dan tidak deterministik
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* STATE TURUNAN                                                     */
+  /* ---------------------------------------------------------------- */
+
+  const loading = dashboardQ.isPending || trxQ.isPending || stockQ.isPending;
+
+  // 403/401 = sesi tidak valid, biarkan interceptor yang tangani. Jadi di sini
+  // cuma error lain yang perlu ditampilkan, dan dashboard harus tetap tampil
+  // dengan angka nol -- layar kosong lebih buruk daripada angka yang jelas
+  // salah.
+  const coreError = dashboardQ.error || trxQ.error || stockQ.error;
+  const error = coreError
+    ? coreError.friendlyMessage || "Gagal memuat data dashboard."
+    : null;
+
+  // Data AI menang kalau sudah datang; kalau belum, fakta cepat menjaga grafik
+  // tetap tampil.
+  const ai = aiQ.data ?? fastQ.data ?? null;
+  const memuatAi = aiQ.isPending || aiQ.isFetching;
+  const errorAi = aiQ.isError
+    ? aiQ.error?.friendlyMessage || "Ringkasan AI tidak tersedia."
+    : fastQ.isError && !aiQ.data
+      ? fastQ.error?.friendlyMessage || "Gagal memuat ringkasan."
+      : null;
+
+  const data = {
+    ringkasan: dashboardQ.data,
+    terbaru: trxQ.data,
+    stok_menipis: stockQ.data,
+  };
+
+  const refetchSemua = () => {
+    dashboardQ.refetch();
+    trxQ.refetch();
+    stockQ.refetch();
+  };
+
+  const perbaruiAi = () => {
+    fastQ.refetch();
+    aiQ.refetch();
+  };
+
+  const r = data.ringkasan || RINGKASAN_KOSONG;
   const fakta = ai?.fakta || {};
   const tren = Array.isArray(fakta.grafik) ? fakta.grafik : [];
   const pakaiOmzet = modeGrafik === "omzet";
@@ -321,8 +348,13 @@ export default function AdminDashboard() {
    * hal yang tidak pernah ada artinya.
    */
 
+  // Nama berkas diturunkan dari `p` (satu bulan/tahun atau "semua"), bukan dari
+  // array `param.bulan`/`param.tahun`, supaya multi-select tidak menghasilkan
+  // nama seperti "2026,2025-10,11".
   const namaBerkas = (akhiran) =>
-    `komang-sac-${akhiran}-${param.tahun || "semua"}${param.bulan ? `-${String(param.bulan).padStart(2, "0")}` : ""}`;
+    p.periode === "bulan"
+      ? `komang-sac-${akhiran}-${p.tahun}-${String(p.bulan).padStart(2, "0")}`
+      : `komang-sac-${akhiran}-semua`;
 
   const eksporRingkasan = () => {
     const growth = fakta.perubahan_omzet_persen;
@@ -516,7 +548,7 @@ export default function AdminDashboard() {
             <p className="font-medium">Data dashboard belum bisa dimuat.</p>
             <p className="text-xs mt-0.5">{error}</p>
             <button
-              onClick={() => muat()}
+              onClick={refetchSemua}
               className="text-xs font-semibold underline mt-1.5"
             >
               Coba lagi
@@ -594,7 +626,7 @@ export default function AdminDashboard() {
             }
             satuanTotal={pakaiOmzet ? "rupiah" : "pekerjaan"}
             kosong={
-              loading
+              fastQ.isPending
                 ? "Memuat grafik…"
                 : `Belum ada pekerjaan yang selesai pada ${label}.`
             }
@@ -621,7 +653,7 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {(data?.terbaru || []).map((t) => (
+                {(data.terbaru || []).map((t) => (
                   <tr
                     key={t.kode || t.id}
                     className="hover:bg-slate-50 transition-colors"
@@ -645,7 +677,7 @@ export default function AdminDashboard() {
                     </td>
                   </tr>
                 ))}
-                {(data?.terbaru || []).length === 0 && (
+                {(data.terbaru || []).length === 0 && (
                   <tr>
                     <td
                       colSpan={5}
@@ -671,7 +703,7 @@ export default function AdminDashboard() {
               <h2 className="font-semibold text-slate-900">Stok Menipis</h2>
             </div>
             <div className="divide-y divide-slate-100">
-              {(data?.stok_menipis || []).map((s) => (
+              {(data.stok_menipis || []).map((s) => (
                 <div
                   key={s.id}
                   className="px-5 py-3 flex items-center justify-between"
@@ -689,7 +721,7 @@ export default function AdminDashboard() {
                   </span>
                 </div>
               ))}
-              {(data?.stok_menipis || []).length === 0 && (
+              {(data.stok_menipis || []).length === 0 && (
                 <p className="px-5 py-8 text-center text-sm text-emerald-600">
                   Semua stok aman.
                 </p>
@@ -754,10 +786,8 @@ export default function AdminDashboard() {
         loading={memuatAi}
         error={errorAi}
         labelPeriode={label}
-        onPerbarui={() => muat(true)}
+        onPerbarui={perbaruiAi}
       />
     </div>
   );
 }
-
-
