@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   Footprints,
@@ -30,42 +31,49 @@ import { SearchInput } from './AdminUi'
 const URUTAN = ['Diterima', 'Diproses', 'Diperiksa', 'Selesai', 'Siap diambil']
 const SELESAI = ['Selesai', 'Siap diambil']
 
+// Array kosong yang selalu sama referensinya, supaya useMemo di bawah tidak
+// dihitung ulang tiap render selagi data belum ada.
+const KOSONG = []
+
 export default function CustomerAccount() {
   const { user } = useAuth()
-  const [transaksi, setTransaksi] = useState([])
-  const [katalog, setKatalog] = useState({})
-  const [jamBuka, setJamBuka] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
   const [cari, setCari] = useState('')
 
-  const muat = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [trx, sh] = await Promise.all([
-        transactionsApi.list(),
-        shoesApi.list(),
-      ])
-      setTransaksi(trx.data || [])
-      setKatalog(Object.fromEntries((sh.data || []).map((s) => [s.id, s])))
-    } catch (err) {
-      setError(err?.friendlyMessage || 'Gagal memuat riwayat sepatu.')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  // `user?.id` ada di key transaksi karena isi daftar berbeda per pengguna.
+  // Dengan begitu cache satu akun tidak pernah terbaca akun lain.
+  const trxQuery = useQuery({
+    queryKey: ['transaksi', 'list', user?.id],
+    queryFn: () => transactionsApi.list().then((r) => r.data || []),
+  })
+  // Key sama dengan halaman drop point, jadi daftar sepatu dipakai bersama.
+  const shoesQuery = useQuery({
+    queryKey: ['katalog', 'semua'],
+    queryFn: () => shoesApi.list().then((r) => r.data || []),
+  })
+  // Jam operasional jarang berubah, jadi cukup diambil sesekali. Kalau gagal,
+  // halaman tetap jalan tanpa info jam buka (sama seperti sebelumnya).
+  const configQuery = useQuery({
+    queryKey: ['config'],
+    queryFn: () => configApi.get().then(({ data }) => data?.business_hours || null),
+    staleTime: 5 * 60_000,
+  })
 
-  useEffect(() => {
-    configApi
-      .get()
-      .then(({ data }) => setJamBuka(data?.business_hours || null))
-      .catch(() => {})
-  }, [])
+  const transaksi = trxQuery.data ?? KOSONG
+  const shoes = shoesQuery.data ?? KOSONG
+  const jamBuka = configQuery.data ?? null
 
-  useEffect(() => {
-    muat()
-  }, [muat])
+  // Nama `loading` dan `error` dipertahankan supaya JSX di bawah tidak berubah.
+  // Error jam operasional sengaja tidak ikut ditampilkan.
+  const loading = trxQuery.isLoading || shoesQuery.isLoading
+  const galat = trxQuery.error || shoesQuery.error
+  const error = galat ? galat.friendlyMessage || 'Gagal memuat riwayat sepatu.' : null
+
+  const muat = () => Promise.all([trxQuery.refetch(), shoesQuery.refetch()])
+
+  const katalog = useMemo(
+    () => Object.fromEntries(shoes.map((s) => [s.id, s])),
+    [shoes]
+  )
 
   /**
    * Transaksi + nama sepatu yang sudah di-resolve di sini. Dipisah supaya
@@ -266,9 +274,8 @@ export default function CustomerAccount() {
               onChange={setCari}
               placeholder="Cari nomor booking atau nama sepatu..."
             />
-            
           </div>
-          </div>
+        </div>
 
         {loading ? (
           <div className="space-y-3">
