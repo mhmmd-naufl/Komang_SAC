@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, Outlet, Link, useLocation } from 'react-router-dom'
-import { Menu, LogOut, LayoutDashboard, Footprints, Truck, Settings, Users, Receipt } from 'lucide-react'
+import { Menu, LogOut, LayoutDashboard, Sparkles, Truck, Settings, Users, Receipt } from 'lucide-react'
 import Navbar from './components/Navbar'
 import Catalog from './components/Catalog'
 import BookingModal, { KUNCI_PENDING_BOOKING } from './components/BookingModal'
@@ -266,7 +266,7 @@ function AdminLayout() {
 
   const navItems = [
     { path: '/admin', label: 'Dashboard', icon: LayoutDashboard, exact: true },
-    { path: '/admin/sepatu', label: 'Kelola Sepatu', icon: Footprints },
+    { path: '/admin/sepatu', label: 'Kelola Layanan', icon: Sparkles },
     { path: '/admin/transaksi', label: 'Transaksi', icon: Truck },
     { path: '/admin/stock', label: 'Stok & Bahan', icon: Settings },
     { path: '/admin/pengeluaran', label: 'Pengeluaran', icon: Receipt },
