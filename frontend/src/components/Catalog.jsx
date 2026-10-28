@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, Footprints, X } from 'lucide-react'
 import { formatRupiah, cn } from '../utils/helpers'
 import { shoesApi } from '../services/api'
@@ -27,40 +28,41 @@ function getKelompokTersedia(baris) {
   return kunci
 }
 
+// Array kosong yang selalu sama referensinya, supaya useMemo di bawah tidak
+// dihitung ulang tiap render selagi data belum ada.
+const KOSONG = []
+
 export default function Catalog({ onSelectShoe }) {
-  const [shoes, setShoes] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
   const [grupAktif, setGrupAktif] = useState(KELOMPOK[0].key)
   // Kartu layanan yang sedang membuka daftar variannya. Pemilihan varian
   // berada DI DALAM kartu (bukan modal terpisah) supaya di HP langkahnya
   // terasa seperti membuka lipatan: tap kartu -> daftar varian -> booking.
   const [kartuTerbuka, setKartuTerbuka] = useState(null)
 
-  // Daftar tab dihitung setelah data masuk, karena kelompok tambahan dari
-  // database hanya bisa diketahui setelah fetch selesai.
-  const [grupTersedia, setGrupTersedia] = useState(KELOMPOK.map((k) => k.key))
+  // Data katalog diambil lewat TanStack Query: loading, error, dan cache
+  // diurus otomatis. Nama `loading` dan `error` dipertahankan supaya JSX di
+  // bawah tidak perlu diubah.
+  const {
+    data,
+    isLoading: loading,
+    error: queryError,
+  } = useQuery({
+    queryKey: ['katalog', { aktif_only: true }],
+    queryFn: () => shoesApi.list({ aktif_only: true }).then((r) => r.data),
+  })
 
-  useEffect(() => {
-    const fetchShoes = async () => {
-      try {
-        setLoading(true)
-        setError(null)
-        const response = await shoesApi.list({ aktif_only: true })
-        const data = response.data
-        setShoes(data)
-        const ada = getKelompokTersedia(data)
-        const gabung = [...KELOMPOK.map((k) => k.key), ...ada.filter((k) => !KELOMPOK.some((x) => x.key === k))]
-        setGrupTersedia(gabung)
-      } catch (err) {
-        setError(err.message)
-        setShoes([])
-      } finally {
-        setLoading(false)
-      }
-    }
-    fetchShoes()
-  }, [])
+  const shoes = Array.isArray(data) ? data : KOSONG
+  const error = queryError ? queryError.friendlyMessage || 'Gagal memuat katalog.' : null
+
+  // Daftar tab dihitung dari data: kelompok bawaan + kelompok tambahan dari
+  // database (hanya bisa diketahui setelah data masuk).
+  const grupTersedia = useMemo(() => {
+    const ada = getKelompokTersedia(shoes)
+    return [
+      ...KELOMPOK.map((k) => k.key),
+      ...ada.filter((k) => !KELOMPOK.some((x) => x.key === k)),
+    ]
+  }, [shoes])
 
   // Tab yang sedang aktif bisa hilang kalau admin menghapus kelompoknya.
   // Jangan sampai katalog kosong tanpa sebab -- fallback ke tab pertama.
@@ -68,7 +70,7 @@ export default function Catalog({ onSelectShoe }) {
 
   const tampil = useMemo(() => {
     if (!grup) return []
-    return Array.isArray(shoes) ? shoes.filter((s) => (s.kelompok || '').trim() === grup) : []
+    return shoes.filter((s) => (s.kelompok || '').trim() === grup)
   }, [shoes, grup])
 
   /**
