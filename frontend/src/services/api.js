@@ -61,6 +61,11 @@ export const authApi = {
   register: (data) => api.post("/api/auth/register", data),
   me: () => api.get("/api/auth/me"),
   setPassword: (password) => api.post("/api/auth/set-password", { password }),
+  changePassword: (passwordLama, passwordBaru) =>
+  api.post("/api/auth/change-password", {
+    password_lama: passwordLama,
+    password_baru: passwordBaru,
+  }),
 };
 
 export const shoesApi = {

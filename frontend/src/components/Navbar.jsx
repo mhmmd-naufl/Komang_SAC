@@ -4,6 +4,7 @@ import { LogOut } from 'lucide-react'
 import Logo from './Logo'
 import { useAuth } from '../contexts/AuthContext'
 import LogoutConfirm from './LogoutConfirm'
+import GantiSandiModal from './GantiSandiModal'
 import { cn, getRoleLabel, getRoleColor } from '../utils/helpers'
 
 /* Halaman beranda tiap peran. Dipakai di navbar supaya setelah login
@@ -20,6 +21,7 @@ export default function Navbar() {
   const location = useLocation()
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [konfirmasiKeluar, setKonfirmasiKeluar] = useState(false)
+  const [gantiSandi, setGantiSandi] = useState(false)
 
   const panelPeran = HALAMAN_PERAN[user?.role]
 
@@ -106,6 +108,15 @@ export default function Navbar() {
                       <button
                         onClick={() => {
                           setDropdownOpen(false)
+                          setGantiSandi(true)
+                        }}
+                        className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                      >
+                        Ganti Sandi
+                      </button>
+                      <button
+                        onClick={() => {
+                          setDropdownOpen(false)
                           setKonfirmasiKeluar(true)
                         }}
                         className="w-full text-left px-4 py-2 text-sm text-rose-600 hover:bg-slate-50"
@@ -143,6 +154,7 @@ export default function Navbar() {
       </header>
 
       <LogoutConfirm open={konfirmasiKeluar} onClose={() => setKonfirmasiKeluar(false)} />
+      <GantiSandiModal open={gantiSandi} onClose={() => setGantiSandi(false)} />
     </>
   )
 }

@@ -7,6 +7,7 @@ import { cn, formatDate, getRoleColor, getRoleLabel } from '../../utils/helpers'
 import { toast } from '../Toast'
 import Pagination from '../Pagination'
 import Modal, { Field, GagalMuat, Kosong, KonfirmasiDialog, Memuat, SearchInput } from '../AdminUi'
+import AksesAkunModal from './AksesAkunModal'
 
 const PERAN = [
   { nilai: 'admin', label: 'Admin' },
@@ -57,6 +58,8 @@ export default function AdminUsers() {
   // Pengguna yang dimintai konfirmasi hapus, dan status penghapusannya.
   const [hapusUser, setHapusUser] = useState(null)
   const [menghapus, setMenghapus] = useState(false)
+  // Akses akun (nomor + sandi sementara) yang baru dibuat/di-reset, untuk dikirim via WhatsApp.
+  const [akses, setAkses] = useState(null)
   // Tidak boleh menghapus akun sendiri -- backend juga menolak, tapi
   // menyembunyikan tombolnya membuat kesalahan tak mungkin terjadi.
   const { user: loginSekarang } = useAuth()
@@ -113,16 +116,12 @@ export default function AdminUsers() {
         })
         toast.success('Data pengguna diperbarui', `${form.full_name.trim()} berhasil disimpan.`)
       } else if (form.buatAkun) {
-        await usersApi.createWithPassword({
+        const { data } = await usersApi.createWithPassword({
           full_name: form.full_name.trim(),
           phone: normalisasiTelepon(form.phone),
           role: form.role,
         })
-        toast.success(
-          'Akun dibuat',
-          `Password sementara = nomor WhatsApp (${normalisasiTelepon(form.phone)}). Minta pengguna segera menggantinya lewat menu Akun.`,
-          { duration: 9000 },
-        )
+        setAkses({ nama: form.full_name.trim(), phone: data.phone, password: data.password })
       } else {
         await usersApi.create({
           full_name: form.full_name.trim(),
@@ -184,11 +183,7 @@ export default function AdminUsers() {
     setSimpan(true)
     try {
       await usersApi.resetPassword(reset.id, kataSandi)
-      toast.success(
-        'Password diatur ulang',
-        `Password ${reset.full_name} sudah diganti. Sampaikan barunya ke pengguna, lalu minta ia menggantinya setelah login.`,
-        { duration: 9000 },
-      )
+      setAkses({ nama: reset.full_name, phone: reset.phone, password: kataSandi, reset: true })
       setReset(null)
     } catch (err) {
       setErrorSandi(err.friendlyMessage || err.message)
@@ -467,8 +462,8 @@ export default function AdminUsers() {
                 <span>
                   <span className="text-sm font-medium text-slate-800">Buat akun login sekarang</span>
                   <span className="block text-xs text-slate-500">
-                    Password sementara = nomor WhatsApp. Pengguna wajib menggantinya lewat menu Akun
-                    setelah login pertama.
+                    Sandi sementara dibuat acak dan ditampilkan sekali setelah akun dibuat, siap
+                    dikirim lewat WhatsApp.
                   </span>
                 </span>
               </label>
@@ -607,6 +602,8 @@ export default function AdminUsers() {
             : ''
         }
       />
+
+      <AksesAkunModal akses={akses} onClose={() => setAkses(null)} />
     </div>
   )
 }

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import Logo from './Logo'
+import { toast } from './Toast'
 import { cn } from '../utils/helpers'
 
 const MANFAAT = [
@@ -74,6 +75,7 @@ export default function LoginModal() {
     try {
       if (mode === 'login') {
         const user = await login(formData.phone, formData.password)
+        toast.success('Berhasil masuk', `Selamat datang, ${user?.full_name || 'pengguna'}.`)
         const fallback = user?.role === 'admin' ? '/admin' : '/'
         navigate(location.state?.from || fallback, { replace: true })
       } else {
@@ -82,6 +84,7 @@ export default function LoginModal() {
           phone: formData.phone,
           password: formData.password,
         })
+        toast.success('Akun dibuat', 'Selamat datang di Komang SAC. Kamu sudah masuk.')
         navigate('/', { replace: true })
       }
     } catch (err) {

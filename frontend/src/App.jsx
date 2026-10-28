@@ -1,25 +1,41 @@
-import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate, Outlet, Link, useLocation } from 'react-router-dom'
-import { Menu, LogOut, LayoutDashboard, Sparkles, Truck, Settings, Users, Receipt } from 'lucide-react'
-import Navbar from './components/Navbar'
-import Catalog from './components/Catalog'
-import BookingModal, { KUNCI_PENDING_BOOKING } from './components/BookingModal'
-import AdminDashboard from './components/AdminDashboard'
-import LoginModal from './components/LoginModal'
-import StatusTracker from './components/StatusTracker'
-import LogoutConfirm from './components/LogoutConfirm'
-import Logo from './components/Logo'
-import TeknisiPage from './components/TeknisiPage'
-import DropPointPage from './components/DropPointPage'
-import CustomerAccount from './components/CustomerAccount'
-import AdminShoes from './components/admin/AdminShoes'
-import AdminTransaksi from './components/admin/AdminTransaksi'
-import AdminStock from './components/admin/AdminStock'
-import AdminUsers from './components/admin/AdminUsers'
-import AdminExpenses from './components/admin/AdminExpenses'
-import { AuthProvider, useAuth } from './contexts/AuthContext'
-import { Toaster } from './components/Toast'
-import { cn } from './utils/helpers'
+import { useEffect, useState } from "react";
+import {
+  Routes,
+  Route,
+  Navigate,
+  Outlet,
+  Link,
+  useLocation,
+} from "react-router-dom";
+import {
+  Menu,
+  LogOut,
+  LayoutDashboard,
+  Sparkles,
+  Truck,
+  Settings,
+  Users,
+  Receipt,
+} from "lucide-react";
+import Navbar from "./components/Navbar";
+import Catalog from "./components/Catalog";
+import BookingModal, { KUNCI_PENDING_BOOKING } from "./components/BookingModal";
+import AdminDashboard from "./components/AdminDashboard";
+import LoginModal from "./components/LoginModal";
+import StatusTracker from "./components/StatusTracker";
+import LogoutConfirm from "./components/LogoutConfirm";
+import Logo from "./components/Logo";
+import TeknisiPage from "./components/TeknisiPage";
+import DropPointPage from "./components/DropPointPage";
+import CustomerAccount from "./components/CustomerAccount";
+import AdminShoes from "./components/admin/AdminShoes";
+import AdminTransaksi from "./components/admin/AdminTransaksi";
+import AdminStock from "./components/admin/AdminStock";
+import AdminUsers from "./components/admin/AdminUsers";
+import AdminExpenses from "./components/admin/AdminExpenses";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { Toaster } from "./components/Toast";
+import { cn } from "./utils/helpers";
 
 /* ------------------------------------------------------------------ */
 /* Public Layout                                                       */
@@ -33,12 +49,16 @@ function PublicLayout({ children }) {
       <footer className="border-t border-slate-200 bg-white">
         <div className="container-main py-8 text-center text-sm text-slate-500">
           <p className="font-semibold text-slate-700">Komang SAC</p>
-          <p className="mt-1">Cuci sepatu profesional dengan tracking real-time.</p>
-          <p className="mt-2 text-xs">&copy; 2026 Komang SAC. Semua hak dilindungi.</p>
+          <p className="mt-1">
+            Cuci sepatu profesional dengan tracking real-time.
+          </p>
+          <p className="mt-2 text-xs">
+            &copy; 2026 Komang SAC. Semua hak dilindungi.
+          </p>
         </div>
       </footer>
     </div>
-  )
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -46,52 +66,67 @@ function PublicLayout({ children }) {
 /* ------------------------------------------------------------------ */
 
 const STEPS = [
-  { n: '01', title: 'Pilih & Booking', desc: 'Pilih layanan, isi data, tentukan drop point.' },
-  { n: '02', title: 'Titip Sepatu', desc: 'Serahkan di drop point, teknisi foto kondisi awal.' },
-  { n: '03', title: 'Pantau Real-time', desc: 'Lihat status: Diterima sampai Siap diambil.' },
-  { n: '04', title: 'Ambil & Bayar', desc: 'Ambil saat siap, bayar sesuai tipe layanan.' },
-]
+  {
+    n: "01",
+    title: "Pilih & Booking",
+    desc: "Pilih layanan, isi data, tentukan drop point.",
+  },
+  {
+    n: "02",
+    title: "Titip Sepatu",
+    desc: "Serahkan di drop point, teknisi foto kondisi awal.",
+  },
+  {
+    n: "03",
+    title: "Pantau Real-time",
+    desc: "Lihat status: Diterima sampai Siap diambil.",
+  },
+  {
+    n: "04",
+    title: "Ambil & Bayar",
+    desc: "Ambil saat siap, bayar sesuai tipe layanan.",
+  },
+];
 
 const DROP_POINTS = [
   {
-    name: 'Outlet Utama',
-    sub: 'Jl. Cisadane No.3',
-    addr: 'Lingkungan Mojoroto R, Singonegaran, Kec. Banyuwangi, Kabupaten Banyuwangi, Jawa Timur 68415',
+    name: "Outlet Utama",
+    sub: "Jl. Cisadane No.3",
+    addr: "Lingkungan Mojoroto R, Singonegaran, Kec. Banyuwangi, Kabupaten Banyuwangi, Jawa Timur 68415",
   },
   {
-    name: 'Dolay Cut',
-    sub: 'Mitra drop point',
-    addr: 'Jl. Kyai Haji Wahid Hasyim No. 76, Kabupaten Banyuwangi',
+    name: "Dolay Cut",
+    sub: "Mitra drop point",
+    addr: "Jl. Kyai Haji Wahid Hasyim No. 76, Kabupaten Banyuwangi",
   },
-]
+];
 
 function HomePage() {
-  const [showBooking, setShowBooking] = useState(false)
-  const [selectedItems, setSelectedItems] = useState([])
+  const [showBooking, setShowBooking] = useState(false);
+  const [selectedItems, setSelectedItems] = useState([]);
 
   const openBooking = (shoe = null) => {
-    setSelectedItems(shoe ? [shoe] : [])
-    setShowBooking(true)
-  }
+    setSelectedItems(shoe ? [shoe] : []);
+    setShowBooking(true);
+  };
 
   // Lanjutkan booking yang tertunda karena konsumen dialihkan ke halaman
   // login (BookingModal menulis daftar layanan pilihan ke sessionStorage).
   // Tanpa ini, konsumen yang baru login harus memilih ulang dari katalog.
   useEffect(() => {
-    const mentah = sessionStorage.getItem(KUNCI_PENDING_BOOKING)
-    if (!mentah) return
-    sessionStorage.removeItem(KUNCI_PENDING_BOOKING)
+    const mentah = sessionStorage.getItem(KUNCI_PENDING_BOOKING);
+    if (!mentah) return;
+    sessionStorage.removeItem(KUNCI_PENDING_BOOKING);
     try {
-      const items = JSON.parse(mentah)
+      const items = JSON.parse(mentah);
       if (Array.isArray(items) && items.length && items[0]?.id) {
-        setSelectedItems(items)
-        setShowBooking(true)
+        setSelectedItems(items);
+        setShowBooking(true);
       }
     } catch {
       // JSON rusak di sessionStorage bukan alasan mengganggu beranda.
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, []);
 
   return (
     <PublicLayout>
@@ -103,12 +138,13 @@ function HomePage() {
               Layanan Cuci Sepatu Premium
             </span>
             <h1 className="text-4xl sm:text-5xl font-bold tracking-tight leading-tight">
-              Sepatu Anda,<br />
+              Sepatu Anda,
+              <br />
               Pulang Seperti Baru.
             </h1>
             <p className="mt-6 text-lg text-primary-100">
-              Titip di drop point terdekat, pantau progres cuci real-time, ambil saat siap.
-              Harga transparan, tanpa biaya tersembunyi.
+              Titip di drop point terdekat, pantau progres cuci real-time, ambil
+              saat siap. Harga transparan, tanpa biaya tersembunyi.
             </p>
             <div className="mt-10 flex flex-wrap gap-4">
               <button
@@ -130,7 +166,9 @@ function HomePage() {
 
       {/* How it works */}
       <section className="container-main py-16">
-        <h2 className="text-2xl font-bold text-slate-900 text-center mb-2">Cara Kerja</h2>
+        <h2 className="text-2xl font-bold text-slate-900 text-center mb-2">
+          Cara Kerja
+        </h2>
         <p className="text-slate-500 text-center mb-10">
           Empat langkah sederhana, nomor booking jadi bukti.
         </p>
@@ -149,12 +187,17 @@ function HomePage() {
       <section className="container-main pb-16">
         <div className="flex items-end justify-between mb-8">
           <div>
-            <h2 className="text-2xl font-bold text-slate-900">Layanan & Harga</h2>
+            <h2 className="text-2xl font-bold text-slate-900">
+              Layanan & Harga
+            </h2>
             <p className="text-slate-500 mt-1">
               Harga per pasang, sudah termasuk perbaikan & workmanship.
             </p>
           </div>
-          <button onClick={() => openBooking()} className="btn-primary hidden sm:inline-flex">
+          <button
+            onClick={() => openBooking()}
+            className="btn-primary hidden sm:inline-flex"
+          >
             Booking
           </button>
         </div>
@@ -164,7 +207,9 @@ function HomePage() {
       {/* Drop points */}
       <section className="bg-white border-y border-slate-200 py-16">
         <div className="container-main">
-          <h2 className="text-2xl font-bold text-slate-900 mb-8">Lokasi Drop Point</h2>
+          <h2 className="text-2xl font-bold text-slate-900 mb-8">
+            Lokasi Drop Point
+          </h2>
           <div className="grid md:grid-cols-2 gap-6">
             {DROP_POINTS.map((dp) => (
               <div key={dp.name} className="card p-6">
@@ -187,11 +232,17 @@ function HomePage() {
       {/* CTA */}
       <section className="container-main py-16">
         <div className="card-primary p-8 sm:p-12 text-center">
-          <h2 className="text-2xl font-bold text-slate-900 mb-3">Siap Cuci Sekarang?</h2>
+          <h2 className="text-2xl font-bold text-slate-900 mb-3">
+            Siap Cuci Sekarang?
+          </h2>
           <p className="text-slate-600 max-w-lg mx-auto mb-8">
-            Booking dalam hitungan detik. Status sepatu bisa dipantau kapan saja lewat nomor booking.
+            Booking dalam hitungan detik. Status sepatu bisa dipantau kapan saja
+            lewat nomor booking.
           </p>
-          <button onClick={() => openBooking()} className="btn-primary text-base px-10 py-3.5">
+          <button
+            onClick={() => openBooking()}
+            className="btn-primary text-base px-10 py-3.5"
+          >
             Mulai Booking
           </button>
         </div>
@@ -205,7 +256,7 @@ function HomePage() {
         />
       )}
     </PublicLayout>
-  )
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -216,14 +267,17 @@ function StatusPage() {
   return (
     <PublicLayout>
       <div className="container-main py-12">
-        <h1 className="text-3xl font-bold text-slate-900 mb-2">Cek Status Sepatu</h1>
+        <h1 className="text-3xl font-bold text-slate-900 mb-2">
+          Cek Status Sepatu
+        </h1>
         <p className="text-slate-500 mb-8">
-          Masukkan nomor booking yang kamu terima saat titip sepatu untuk melihat progres terbaru.
+          Masukkan nomor booking yang kamu terima saat titip sepatu untuk
+          melihat progres terbaru.
         </p>
         <StatusTracker />
       </div>
     </PublicLayout>
-  )
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -231,18 +285,19 @@ function StatusPage() {
 /* ------------------------------------------------------------------ */
 
 function ProtectedRoute({ children, allowedRoles }) {
-  const { user, loading } = useAuth()
+  const { user, loading } = useAuth();
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary-600 border-t-transparent" />
       </div>
-    )
+    );
   }
-  if (!user) return <Navigate to="/login" replace />
-  if (allowedRoles && !allowedRoles.includes(user.role)) return <Navigate to="/" replace />
-  return children
+  if (!user) return <Navigate to="/login" replace />;
+  if (allowedRoles && !allowedRoles.includes(user.role))
+    return <Navigate to="/" replace />;
+  return children;
 }
 
 /* ------------------------------------------------------------------ */
@@ -251,7 +306,7 @@ function ProtectedRoute({ children, allowedRoles }) {
    ------------------------------------------------------------------ */
 
 function AdminHome() {
-  return <AdminDashboard />
+  return <AdminDashboard />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -259,33 +314,38 @@ function AdminHome() {
 /* ------------------------------------------------------------------ */
 
 function AdminLayout() {
-  const { user } = useAuth()
-  const location = useLocation()
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [konfirmasiKeluar, setKonfirmasiKeluar] = useState(false)
+  const { user } = useAuth();
+  const location = useLocation();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [konfirmasiKeluar, setKonfirmasiKeluar] = useState(false);
 
   const navItems = [
-    { path: '/admin', label: 'Dashboard', icon: LayoutDashboard, exact: true },
-    { path: '/admin/sepatu', label: 'Kelola Layanan', icon: Sparkles },
-    { path: '/admin/transaksi', label: 'Transaksi', icon: Truck },
-    { path: '/admin/stock', label: 'Stok & Bahan', icon: Settings },
-    { path: '/admin/pengeluaran', label: 'Pengeluaran', icon: Receipt },
-    { path: '/admin/users', label: 'Pengguna', icon: Users },
-  ]
+    { path: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
+    { path: "/admin/sepatu", label: "Kelola Layanan", icon: Sparkles },
+    { path: "/admin/transaksi", label: "Transaksi", icon: Truck },
+    { path: "/admin/stock", label: "Stok & Bahan", icon: Settings },
+    { path: "/admin/pengeluaran", label: "Pengeluaran", icon: Receipt },
+    { path: "/admin/users", label: "Pengguna", icon: Users },
+  ];
 
   const isActive = (item) =>
-    item.exact ? location.pathname === item.path : location.pathname.startsWith(item.path)
+    item.exact
+      ? location.pathname === item.path
+      : location.pathname.startsWith(item.path);
 
   return (
     <div className="min-h-screen bg-slate-50">
       {sidebarOpen && (
-        <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
+        <div
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
       )}
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 transition-transform duration-300 lg:translate-x-0',
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          "fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 transition-transform duration-300 lg:translate-x-0",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
         <div className="flex flex-col h-full">
@@ -301,10 +361,10 @@ function AdminLayout() {
                 to={item.path}
                 onClick={() => setSidebarOpen(false)}
                 className={cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors',
+                  "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors",
                   isActive(item)
-                    ? 'bg-primary-50 text-primary-700'
-                    : 'text-slate-600 hover:bg-slate-50'
+                    ? "bg-primary-50 text-primary-700"
+                    : "text-slate-600 hover:bg-slate-50",
                 )}
               >
                 <item.icon className="h-5 w-5" />
@@ -319,8 +379,12 @@ function AdminLayout() {
                 {user?.full_name?.charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-slate-900 truncate">{user?.full_name}</p>
-                <p className="text-xs text-slate-500 capitalize">{user?.role}</p>
+                <p className="text-sm font-medium text-slate-900 truncate">
+                  {user?.full_name}
+                </p>
+                <p className="text-xs text-slate-500 capitalize">
+                  {user?.role}
+                </p>
               </div>
               <button
                 onClick={() => setKonfirmasiKeluar(true)}
@@ -343,7 +407,9 @@ function AdminLayout() {
             >
               <Menu className="h-6 w-6 text-slate-600" />
             </button>
-            <h1 className="text-lg font-bold text-slate-900">Komang SAC Admin</h1>
+            <h1 className="text-lg font-bold text-slate-900">
+              Komang SAC Admin
+            </h1>
           </div>
         </header>
 
@@ -357,7 +423,7 @@ function AdminLayout() {
         onClose={() => setKonfirmasiKeluar(false)}
       />
     </div>
-  )
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -365,34 +431,46 @@ function AdminLayout() {
 /* ------------------------------------------------------------------ */
 
 const JUDUL_PERAN = {
-  technician: { judul: 'Panel Teknisi', sub: 'Pekerjaan yang sedang kamu tangani' },
-  drop_point: { judul: 'Panel Mitra', sub: 'Titipan dan notifikasi pelanggan' },
-  customer: { judul: 'Shoes Saya', sub: 'Riwayat dan progres cucianmu' },
-}
+  technician: {
+    judul: "Panel Teknisi",
+    sub: "Pekerjaan yang sedang kamu tangani",
+  },
+  drop_point: { judul: "Panel Mitra", sub: "Titipan dan notifikasi pelanggan" },
+  customer: { judul: "Shoes Saya", sub: "Riwayat dan progres cucianmu" },
+};
 
 function RoleLayout() {
-  const { user } = useAuth()
-  const [konfirmasiKeluar, setKonfirmasiKeluar] = useState(false)
-  const meta = JUDUL_PERAN[user?.role] || { judul: 'Komang SAC', sub: '' }
-  const Inisial = user?.full_name?.charAt(0).toUpperCase() || '?'
+  const { user } = useAuth();
+  const [konfirmasiKeluar, setKonfirmasiKeluar] = useState(false);
+  const meta = JUDUL_PERAN[user?.role] || { judul: "Komang SAC", sub: "" };
+  const Inisial = user?.full_name?.charAt(0).toUpperCase() || "?";
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="container-main flex items-center gap-4 h-16">
           <Link to="/" className="flex items-center gap-2 shrink-0">
-            <Logo className="h-8 w-8" fallbackClassName="bg-primary-600 rounded-lg" />
-            <span className="hidden sm:block font-bold text-primary-700">Komang SAC</span>
+            <Logo
+              className="h-8 w-8"
+              fallbackClassName="bg-primary-600 rounded-lg"
+            />
+            <span className="hidden sm:block font-bold text-primary-700">
+              Komang SAC
+            </span>
           </Link>
 
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-slate-900 truncate">{meta.judul}</p>
+            <p className="text-sm font-semibold text-slate-900 truncate">
+              {meta.judul}
+            </p>
             <p className="text-[11px] text-slate-500 truncate">{meta.sub}</p>
           </div>
 
           <div className="flex items-center gap-2">
             <div className="hidden sm:block text-right">
-              <p className="text-xs font-medium text-slate-900">{user?.full_name}</p>
+              <p className="text-xs font-medium text-slate-900">
+                {user?.full_name}
+              </p>
               <p className="text-[10px] text-slate-500">{user?.phone}</p>
             </div>
             <div className="h-9 w-9 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 font-semibold text-sm shrink-0">
@@ -425,7 +503,7 @@ function RoleLayout() {
         onClose={() => setKonfirmasiKeluar(false)}
       />
     </div>
-  )
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -442,7 +520,7 @@ function AppRoutes() {
       <Route
         path="/admin"
         element={
-          <ProtectedRoute allowedRoles={['admin']}>
+          <ProtectedRoute allowedRoles={["admin"]}>
             <AdminLayout />
           </ProtectedRoute>
         }
@@ -460,7 +538,7 @@ function AppRoutes() {
       <Route
         path="/teknisi"
         element={
-          <ProtectedRoute allowedRoles={['technician']}>
+          <ProtectedRoute allowedRoles={["technician"]}>
             <RoleLayout />
           </ProtectedRoute>
         }
@@ -471,7 +549,7 @@ function AppRoutes() {
       <Route
         path="/mitra"
         element={
-          <ProtectedRoute allowedRoles={['drop_point']}>
+          <ProtectedRoute allowedRoles={["drop_point"]}>
             <RoleLayout />
           </ProtectedRoute>
         }
@@ -482,7 +560,7 @@ function AppRoutes() {
       <Route
         path="/akun"
         element={
-          <ProtectedRoute allowedRoles={['customer']}>
+          <ProtectedRoute allowedRoles={["customer"]}>
             <RoleLayout />
           </ProtectedRoute>
         }
@@ -492,7 +570,7 @@ function AppRoutes() {
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
-  )
+  );
 }
 
 export default function App() {
@@ -501,5 +579,5 @@ export default function App() {
       <AppRoutes />
       <Toaster />
     </AuthProvider>
-  )
+  );
 }

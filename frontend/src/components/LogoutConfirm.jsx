@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { LogOut, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { toast } from './Toast'
 
 /**
  * Konfirmasi logout untuk semua peran.
@@ -43,6 +44,7 @@ export default function LogoutConfirm({ open, onClose }) {
   const konfirmasi = () => {
     onClose()
     logout()
+    toast.success('Berhasil keluar', 'Sampai jumpa lagi.')
   }
 
   return (

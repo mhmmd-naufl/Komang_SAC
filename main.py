@@ -1303,21 +1303,25 @@ def me(user: dict = Depends(get_current_user)):
         "is_verified": user.get("is_verified", False),
     }
 
-@app.post("/api/auth/set-password", response_model=UserPublic, tags=["Auth"])
-@limiter.limit("5/minute")
-def set_password(request: Request, payload: PasswordSet, user: dict = Depends(get_current_user)):
-    """Set / ganti password untuk user yang sedang login."""
-    supabase.from_("profiles").update(
-        {"password_hash": hash_password(payload.password)}
-    ).eq("id", user["id"]).execute()
-    return {
-        "id": user["id"],
-        "full_name": user["full_name"],
-        "phone": user["phone"],
-        "role": user["role"],
-        "is_verified": user.get("is_verified", False),
-    }
 
+class PasswordChange(BaseModel):
+    password_lama: str = Field(..., min_length=1)
+    password_baru: str = Field(..., min_length=6)
+
+
+@app.post("/api/auth/change-password", tags=["Auth"])
+@limiter.limit("5/minute")
+def change_password(request: Request, payload: PasswordChange, user: dict = Depends(get_current_user)):
+    """Ganti sandi sendiri. Wajib menyertakan sandi lama."""
+    # Sengaja 400, bukan 401: 401 membuat api.js men-logout user otomatis.
+    if not verify_password(payload.password_lama, user.get("password_hash")):
+        raise HTTPException(400, "Sandi saat ini salah")
+    if payload.password_baru == payload.password_lama:
+        raise HTTPException(400, "Sandi baru harus berbeda dari sandi saat ini")
+    supabase.from_("profiles").update(
+        {"password_hash": hash_password(payload.password_baru)}
+    ).eq("id", user["id"]).execute()
+    return {"detail": "Sandi berhasil diganti"}
 
 class PasswordReset(BaseModel):
     """Password baru untuk pengguna lain. Panjang minimum sama dengan register."""
@@ -2766,16 +2770,26 @@ def create_user(user: ProfileCreate, _: dict = Depends(require_role("admin"))):
             raise HTTPException(400, "Nomor telepon sudah terdaftar")
         raise HTTPException(500, f"Database error: {str(e)}")
 
+def _password_acak(panjang: int = 8) -> str:
+    # Tanpa karakter yang mirip (I, l, O, 0, 1) supaya mudah dibaca di WhatsApp.
+    alfabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+    return "".join(secrets.choice(alfabet) for _ in range(panjang))
+
 # Versi dengan password — dipakai admin saat membuat teknisi/drop point
 @app.post("/api/users/with-password", status_code=status.HTTP_201_CREATED, tags=["Users"])
 def create_user_with_password(payload: ProfileCreate, _: dict = Depends(require_role("admin"))):
-    created = _create_user_with_password(
+    password = _password_acak()
+    _create_user_with_password(
         full_name=payload.full_name,
         phone=payload.phone,
-        password=payload.phone,  # sementara: password = nomor HP
+        password=password,
         role=payload.role,
     )
-    return {"detail": "User dibuat. Password sementara = nomor WhatsApp. Minta user segera ganti."}
+    return {
+        "detail": "User dibuat dengan sandi sementara acak.",
+        "phone": normalize_phone(payload.phone),
+        "password": password,
+    }
 
 @app.get("/api/users", response_model=List[ProfileResponse], tags=["Users"])
 def list_users(
