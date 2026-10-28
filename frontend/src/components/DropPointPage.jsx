@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Truck,
   CheckCircle2,
@@ -41,38 +42,61 @@ const STATUS_TERSEDIA = [
 ];
 const SIAP_AMBIL = "Siap diambil";
 
+// Array kosong yang selalu sama referensinya, supaya useMemo di bawah tidak
+// dihitung ulang tiap render selagi data belum ada.
+const KOSONG = [];
+
 export default function DropPointPage() {
   const { user } = useAuth();
-  const [transaksi, setTransaksi] = useState([]);
-  const [katalog, setKatalog] = useState({});
-  const [dropPoints, setDropPoints] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [cari, setCari] = useState("");
   const [filter, setFilter] = useState("");
 
-  const muat = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [trx, sh, dp] = await Promise.all([
-        transactionsApi.list({ limit: 200 }),
-        shoesApi.list(),
-        dropPointsApi.list(),
-      ]);
-      setTransaksi(trx.data || []);
-      setKatalog(Object.fromEntries((sh.data || []).map((s) => [s.id, s])));
-      setDropPoints(dp.data || []);
-    } catch (err) {
-      setError(err?.friendlyMessage || "Gagal memuat data.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Tiga sumber data, masing-masing satu query. Dulu digabung dengan
+  // Promise.all di satu fungsi `muat`; sekarang masing-masing punya cache
+  // sendiri (daftar sepatu, misalnya, bisa dipakai bersama halaman lain).
+  //
+  // `user?.id` ada di key transaksi karena isi daftar berbeda per pengguna
+  // (field disaring per peran). Dengan begitu cache satu akun tidak pernah
+  // terbaca akun lain.
+  const trxQuery = useQuery({
+    queryKey: ["transaksi", "list", user?.id, { limit: 200 }],
+    queryFn: () =>
+      transactionsApi.list({ limit: 200 }).then((r) => r.data || []),
+  });
+  const shoesQuery = useQuery({
+    queryKey: ["katalog", "semua"],
+    queryFn: () => shoesApi.list().then((r) => r.data || []),
+  });
+  const dropPointQuery = useQuery({
+    queryKey: ["drop-points"],
+    queryFn: () => dropPointsApi.list().then((r) => r.data || []),
+  });
 
-  useEffect(() => {
-    muat();
-  }, [muat]);
+  const transaksi = trxQuery.data ?? KOSONG;
+  const shoes = shoesQuery.data ?? KOSONG;
+  const dropPoints = dropPointQuery.data ?? KOSONG;
+
+  // Nama `loading` dan `error` dipertahankan supaya JSX di bawah tidak berubah.
+  // `loading` hanya true saat data belum pernah ada (muat pertama kali).
+  const loading =
+    trxQuery.isLoading || shoesQuery.isLoading || dropPointQuery.isLoading;
+  // `refreshing` true setiap ada request berjalan, termasuk muat ulang.
+  const refreshing =
+    trxQuery.isFetching || shoesQuery.isFetching || dropPointQuery.isFetching;
+  const galat = trxQuery.error || shoesQuery.error || dropPointQuery.error;
+  const error = galat ? galat.friendlyMessage || "Gagal memuat data." : null;
+
+  const muat = () =>
+    Promise.all([
+      trxQuery.refetch(),
+      shoesQuery.refetch(),
+      dropPointQuery.refetch(),
+    ]);
+
+  const katalog = useMemo(
+    () => Object.fromEntries(shoes.map((s) => [s.id, s])),
+    [shoes],
+  );
 
   /**
    * Transaksi + nama sepatu yang sudah di-resolve di sini. Dipisah supaya
@@ -106,13 +130,13 @@ export default function DropPointPage() {
   }, [daftar, filter, cari]);
 
   const hitungStatus = useMemo(() => {
-  if (!Array.isArray(transaksi)) return { semua: 0 }
-  const out = { semua: transaksi.length }
-  transaksi.forEach((t) => {
-    out[t.status] = (out[t.status] || 0) + 1
-  })
-  return out
-}, [transaksi])
+    if (!Array.isArray(transaksi)) return { semua: 0 };
+    const out = { semua: transaksi.length };
+    transaksi.forEach((t) => {
+      out[t.status] = (out[t.status] || 0) + 1;
+    });
+    return out;
+  }, [transaksi]);
 
   /**
    * Berapa titipan yang MASUK hari ini (WIB).
@@ -123,11 +147,11 @@ export default function DropPointPage() {
    * tidak ikut berubah saat mitra mengetik di kolom pencarian.
    */
   const masukHariIni = useMemo(() => {
-  if (!Array.isArray(transaksi)) return 0
-  const hari = tanggalWib(new Date())
-  if (!hari) return 0
-  return transaksi.filter((t) => tanggalWib(t.created_at) === hari).length
-}, [transaksi])
+    if (!Array.isArray(transaksi)) return 0;
+    const hari = tanggalWib(new Date());
+    if (!hari) return 0;
+    return transaksi.filter((t) => tanggalWib(t.created_at) === hari).length;
+  }, [transaksi]);
 
   /** Link wa.me -- semi-manual: sistem menyalin template, partner yang kirim. */
   const linkWa = (nomor, pesan) =>
@@ -235,7 +259,7 @@ export default function DropPointPage() {
           />
         </div>
         <button onClick={muat} className="btn-secondary flex-shrink-0">
-          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+          <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
           Muat ulang
         </button>
       </div>
