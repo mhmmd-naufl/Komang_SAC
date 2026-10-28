@@ -1,184 +1,142 @@
-# Komang SAC — Sistem Manajemen Cuci Sepatu
+# Komang SAC
+**Sistem Manajemen Operasional Cuci Sepatu**
 
-[![CI](https://github.com/mhmmd-naufl/Komang_SAC/actions/workflows/ci.yml/badge.svg)](https://github.com/mhmmd-naufl/Komang_SAC/actions/workflows/ci.yml)
-[![Lisensi: MIT](https://img.shields.io/badge/Lisensi-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.142-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
-[![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com/)
+[![Live Demo](https://img.shields.io/badge/Live_Demo-komang--sac.pages.dev-000000?style=flat-square&logo=cloudflarepages)](https://komang-sac.pages.dev)
 
-Aplikasi web operasional untuk bisnis cuci sepatu: pelanggan melacak status
-cucian, teknisi mencatat progres dan foto, admin memantau omzet, stok, dan
-komisi.
-
-> Proyek nyata untuk usaha laundry lokal. Full-stack, **gratis di semua
-> service-nya**, tanpa kartu kredit. Bahasa antarmuka: Indonesia.
+Aplikasi web *full-stack* yang dirancang untuk mendigitalisasi operasional bisnis laundry sepatu lokal. Mengelola alur kerja dari pemesanan pelanggan, progres teknisi, hingga analisis omzet dan inventaris oleh admin dalam satu platform terpusat.
 
 ---
 
-## Fitur
+## 🎯 Masalah & Solusi
 
-| Peran | Kemampuan |
-|---|---|
-| **Pelanggan** | Katalog harga, booking multi-pasang, lacak status + foto, riwayat & profil |
-| **Teknisi** | Daftar tugas, update status (wajib foto saat Selesai), catatan cacat, tender harga |
-| **Admin** | Dashboard omzet/stok/komisi per periode, master layanan & harga, stok, pengeluaran, kelola user & mitra, ringkasan AI |
-| **Mitra** | Terima antrean cucian, input transaksi, pantau transaksi outlet |
-
-Alur status cucian: `Diterima → Diproses → Diperiksa → Selesai → Siap diambil`.
-Booking bisa berisi beberapa pasang sekaligus (dihubungkan lewat `grup_id`).
+- **Masalah:** Pencatatan manual yang rentan *human error*, tidak adanya transparansi status pengerjaan untuk pelanggan, dan kesulitan memantau omzet serta komisi teknisi secara *real-time*.
+- **Solusi:** Sistem terpusat dengan pelacakan status *real-time*, kewajiban unggah foto bukti progres dari teknisi, dan dashboard analitik otomatis untuk admin.
 
 ---
 
-## Arsitektur
+## ⚙️ Fitur Berdasarkan Peran
 
-```
-  Browser (4 peran, 1 SPA)
-            │  HTTPS · axios · JWT bearer
-            ▼
-  React 18 + Vite + Tailwind
-  30 komponen · route dijaga per peran
-            │  /api/*
-            ▼
-  FastAPI — main.py
-  51 endpoint · JWT HS256 · RBAC per-field · slowapi
-        ┌───┴──────────────────────┐
-        ▼                          ▼
-  analytics.py                Supabase
-  angka deterministik         PostgreSQL (6 tabel)
-  + narasi AI (opsional)      Storage (foto sepatu)
-  + fallback aturan           RLS aktif di `expenses`
-```
+Alur status standar: `Diterima` → `Diproses` → `Diperiksa` → `Selesai` → `Siap Diambil`
 
-Frontend **tidak** memakai Supabase Realtime — semua lewat FastAPI, sehingga
-seluruh aturan RBAC ditegakkan di satu tempat.
+| Peran | Fungsi Utama |
+| :--- | :--- |
+| **Pelanggan** | Katalog harga, booking multi-pasang (`grup_id`), pelacakan status *real-time* + foto bukti, riwayat transaksi. |
+| **Teknisi** | Daftar tugas harian, *update* progres, *upload* foto (wajib pada status "Selesai"), pencatatan kondisi/cacat barang. |
+| **Admin** | Dashboard analitik (omzet, stok, komisi), manajemen master layanan & harga, kontrol pengeluaran, dan manajemen *user*. |
+| **Mitra** | Penerimaan antrean cucian, *input* transaksi outlet, dan pemantauan performa cabang. |
 
 ---
 
-## Teknologi
+## 🛠️ Tech Stack
 
-| Layer | Pilihan | Alasan |
-|---|---|---|
-| Backend | Python 3.12 · FastAPI · Pydantic v2 | Async, tipe kuat, dokumentasi otomatis |
-| Auth | JWT HS256 · PBKDF2-SHA256 | Tanpa dependency bcrypt |
-| Database | Supabase PostgreSQL + RLS | Free tier, RLS jadi lapisan keamanan |
-| Frontend | React 18 · Vite · Tailwind · react-router-dom | SPA cepat, guard route per peran |
-| Rate limit | slowapi (in-memory) | Tanpa Redis, tetap gratis |
-| AI | OpenRouter (model gratis) | Opsional, punya fallback deterministik |
-| CI | GitHub Actions | 3 job: lint+build, compile, uji RBAC |
+Pemilihan teknologi berfokus pada efisiensi, keamanan, dan optimalisasi *free-tier* tanpa mengorbankan performa.
 
----
-
-## Screenshot
-
-> Placeholder — ganti dengan tangkapan layar asli.
->
-> 1. Katalog harga (halaman depan, tanpa login)
-> 2. Halaman lacak status transaksi
-> 3. Dashboard admin — omzet, stok, grafik
-> 4. Panel teknisi — daftar tugas + upload foto
->
-> Simpan di `docs/img/` lalu rujuk seperti ini:
-> `![Dashboard admin](docs/img/dashboard-admin.png)`
+| Layer | Teknologi | Alasan Pemilihan |
+| :--- | :--- | :--- |
+| **Frontend** | React 18 · Vite · Tailwind CSS | SPA yang cepat, reaktif, dan *utility-first styling*. |
+| **Backend** | Python 3.12 · FastAPI · Pydantic v2 | *Async native*, validasi tipe data yang ketat, dokumentasi API otomatis. |
+| **Database** | Supabase (PostgreSQL) | Skema relasional yang *robust* dengan *Row-Level Security* (RLS) bawaan. |
+| **Storage** | Supabase Storage | Penyimpanan terintegrasi untuk bukti foto cucian. |
+| **Keamanan** | JWT (HS256) · PBKDF2-SHA256 | Autentikasi *stateless* yang aman dengan minimal *dependency*. |
+| **CI/CD** | GitHub Actions | Otomatisasi *linting*, *build*, dan pengujian RBAC sebelum *merge*. |
 
 ---
 
-## Menjalankan
+## 🏗️ Arsitektur Sistem
 
+<p align="center">
+  <svg width="600" height="380" viewBox="0 0 600 380" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Definitions for shadows and arrows -->
+    <defs>
+      <filter id="shadow" x="-2" y="-2" width="104%" height="104%">
+        <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+      </filter>
+      <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L0,6 L9,3 z" fill="#64748b" />
+      </marker>
+    </defs>
+
+    <!-- Background (Optional, ensures visibility in dark mode) -->
+    <rect width="600" height="380" fill="#ffffff" rx="8"/>
+    <rect width="600" height="380" fill="none" stroke="#e2e8f0" stroke-width="1" rx="8"/>
+
+    <!-- 1. Frontend Layer -->
+    <g filter="url(#shadow)">
+      <rect x="150" y="30" width="300" height="60" fill="#ffffff" stroke="#3b82f6" stroke-width="2" rx="6"/>
+      <text x="300" y="55" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600" fill="#0f172a" text-anchor="middle">Frontend (React 18 + Vite + Tailwind)</text>
+      <text x="300" y="75" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#64748b" text-anchor="middle">4 Peran Pengguna · SPA · Utility-first Styling</text>
+    </g>
+
+    <!-- Arrow 1 -->
+    <line x1="300" y1="90" x2="300" y2="120" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="308" y="110" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#64748b">HTTPS · JWT Bearer</text>
+
+    <!-- 2. Backend Layer -->
+    <g filter="url(#shadow)">
+      <rect x="150" y="130" width="300" height="70" fill="#ffffff" stroke="#0f172a" stroke-width="2" rx="6"/>
+      <text x="300" y="155" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600" fill="#0f172a" text-anchor="middle">Backend (FastAPI · Python 3.12)</text>
+      <text x="300" y="175" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#64748b" text-anchor="middle">Strict RBAC · Pydantic v2 Validation · Slowapi Rate Limiting</text>
+    </g>
+
+    <!-- Arrow 2 (Split Left) -->
+    <path d="M300 200 L300 220 L180 220 L180 240" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+    
+    <!-- Arrow 2 (Split Right) -->
+    <path d="M300 200 L300 220 L420 220 L420 240" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- 3. Database Layer (Left) -->
+    <g filter="url(#shadow)">
+      <rect x="60" y="250" width="220" height="70" fill="#ffffff" stroke="#10b981" stroke-width="2" rx="6"/>
+      <text x="170" y="275" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600" fill="#0f172a" text-anchor="middle">Supabase PostgreSQL</text>
+      <text x="170" y="295" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#64748b" text-anchor="middle">Relational Data · Row-Level Security (RLS)</text>
+      <text x="170" y="310" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#64748b" text-anchor="middle">Active on `expenses` & sensitive tables</text>
+    </g>
+
+    <!-- 4. Storage & Analytics Layer (Right) -->
+    <g filter="url(#shadow)">
+      <rect x="320" y="250" width="220" height="70" fill="#ffffff" stroke="#8b5cf6" stroke-width="2" rx="6"/>
+      <text x="430" y="275" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600" fill="#0f172a" text-anchor="middle">Storage & Analytics</text>
+      <text x="430" y="295" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#64748b" text-anchor="middle">Supabase Storage (Shoe Photos)</text>
+      <text x="430" y="310" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#64748b" text-anchor="middle">Deterministic Rules + AI Fallback</text>
+    </g>
+
+    <!-- Security Note at Bottom -->
+    <rect x="40" y="340" width="520" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1" rx="4"/>
+    <text x="300" y="360" font-family="system-ui, -apple-system, sans-serif" font-size="11" font-style="italic" fill="#475569" text-anchor="middle">Catatan: Frontend tidak mengakses DB langsung. Validasi bisnis & sekuritas ditegakkan terpusat di backend.</text>
+  </svg>
+</p>
+
+## 🚀 Local Development
+
+### Prasyarat
+- Python 3.12+
+- Node.js 18+
+- Akun Supabase
+
+### 1. Clone Repository
 ```bash
-# 1. Backend
-python -m venv .venv && .venv\Scripts\activate
+git clone https://github.com/mhmmd-naufl/Komang_SAC.git
+cd Komang_SAC
+```
+
+### 2. Setup Backend
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # Untuk Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-# 2. Frontend
-cd frontend && npm install && cd ..
+uvicorn main:app --reload
 ```
 
+### 3. Setup Frontend
 ```bash
-# 3. Database — tempel schema.sql ke Supabase SQL Editor → Run
-#    (punya database lama? pakai migrate.sql, aman diulang)
-
-# 4. Konfigurasi
-#    Kredensial backend tinggal di repo privat (folder privat/).
-#    Di laptop baru:
-#      git clone https://github.com/mhmmd-naufl/Komang_SAC_privat.git privat
-#      copy privat\frontend.env frontend\.env
-#    Kalau repo privat tidak tersedia, isi manual:
-#      copy .env.example privat\.env
-copy frontend\.env.example frontend\.env
-
-# 5. Jalankan
-.venv\Scripts\python.exe uvicorn main:app --reload --port 8001
-cd frontend && npm run dev
+cd ../frontend
+npm install
+npm run dev
 ```
 
-Backend: <http://127.0.0.1:8001> · Frontend: <http://localhost:3000>
-
-> Port **8001**, bukan 8000 — port 8000 dipakai aplikasi lain di mesin yang sama.
-> Kalau dua backend merebut satu port, frontend diam-diam memakai API yang salah.
-
-> **Kredensial tidak ada di repo ini.** Repo publik ini memang harus tetap
-> publik, jadi `.env` backend disimpan di repo GitHub **Private**
-> (`Komang_SAC_privat`) yang di-clone ke folder `privat/`. Backend membacanya
-> otomatis; folder `privat/` di-ignore repo ini dan CI gagal kalau sampai
-> ikut ter-commit. Detailnya di [docs/REPO-PRIVAT.md](docs/REPO-PRIVAT.md).
-
 ---
 
-## Keputusan Teknis
+## 📸 Preview
 
-- **RBAC per-field, bukan per-endpoint.** Field `harga` dan `tech_commission`
-  dihapus dari respons untuk teknisi; `customer` (nama + nomor WhatsApp)
-  dihapus untuk teknisi dan konsumen. Penarikan ini berlaku di *semua* endpoint
-  yang mengembalikan transaksi — kalau ada satu yang lupa, teknisi bisa
-  membaca komisi dari panel Network di DevTools.
-
-- **Angka dashboard dihitung deterministik.** AI hanya menulis narasi dan
-  saran, tidak pernah menyentuh angka, grafik, atau tabel. Semua dihitung di
-  `analytics.py`. Kalau model mati atau kena rate limit, fallback berbasis
-  aturan menggantikannya — jadi dashboard tidak pernah kosong hanya karena
-  layanan AI sedang tidak sehat.
-
-- **Free-tier first, tanpa kompromi keamanan.** Row Level Security di Supabase,
-  rate limit in-memory (tanpa Redis), penghapusan foto otomatis lewat GitHub
-  Actions. Nol biaya running.
-
-- **Guard di CI.** Workflow gagal kalau `.env` atau folder `privat/` ikut
-  ter-commit. Secret dibaca lewat `env:` dan tidak pernah ditulis ke log.
-
-- **Rahasia tidak pernah menyentuh repo publik.** Kredensial backend disimpan
-  di repo GitHub **Private** terpisah, di-clone ke folder `privat/` yang
-  di-ignore. Bukan branch privat — history repo publik bisa bocor ke commit
-  yang salah, dan mengoreksinya berarti rewrite history. Modularisasi
-  kredensial jadi **repo kedua**, jadi memindahkannya ke device baru cuma
-  `git clone`, tanpa ada yang perlu diketik ulang.
-
-- **Laporan omzet dihitung dari tanggal *selesai*, bukan tanggal masuk.**
-  Cucian yang masuk tanggal 31 dan selesai tanggal 2 adalah hasil bulan 2.
-
----
-
-## Dokumentasi
-
-Dokumentasi lengkap ada di folder [`docs/`](docs/):
-
-| Dokumen | Isi |
-|---|---|
-| [PANDUAN-PENGGUNA.md](docs/PANDUAN-PENGGUNA.md) | Panduan pemakaian untuk konsumen, teknisi, mitra, & admin: login, booking, tracking, panel admin |
-| [ARSITEKTUR.md](docs/ARSITEKTUR.md) | Model data, 51 endpoint, pagination, laporan, AI, rate limit, TTL foto |
-| [OPERASIONAL.md](docs/OPERASIONAL.md) | Setup, environment variable, CI, deploy, troubleshooting |
-| [REPO-PRIVAT.md](docs/REPO-PRIVAT.md) | Repo privat untuk file sensitif (kredensial, data) |
-| [prd.md](docs/prd.md) | Spesifikasi fitur per role |
-| [plan.md](docs/plan.md) | Roadmap + status implementasi |
-| [design.md](docs/design.md) | Sistem desain UI |
-| [blueprint.md](docs/blueprint.md) | Stack, pola skema, design token |
-| [summary.md](docs/summary.md) | Ringkasan untuk partner |
-| [data.md](docs/data.md) | Format intake data master |
-| [HANDOVER.md](docs/HANDOVER.md) | Dokumen serah terima |
-| [REVIEW_ROLE.md](docs/REVIEW_ROLE.md) | Review per role + rekomendasi upgrade |
-
----
-
-## Lisensi
-
-[MIT](LICENSE)
+![Dashboard Admin Preview](https://raw.githubusercontent.com/mhmmd-naufl/Komang_SAC/main/docs/dashboard-preview.png)
