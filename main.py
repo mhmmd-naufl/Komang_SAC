@@ -11,14 +11,44 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 import limits
-from pydantic import BaseModel, Field, model_validator
-from typing import Optional, List, Callable
-from supabase import create_client, Client
+from pydantic import BaseModel, Field, model_validator, BeforeValidator
+from typing import Optional, List, Callable, Annotated
+from supabase import create_client, Client, ClientOptions
+import httpx
 import jwt
 import math
 from dotenv import load_dotenv
 
 import analytics
+
+
+def _waktu_utc(value):
+    """
+    Paksa timestamp tanpa zona dari database dibaca sebagai UTC.
+
+    Kolom `transactions.created_at` di database lama bertipe
+    `timestamp without time zone` (walau schema.sql menyebut TIMESTAMPTZ),
+    jadi PostgREST mengembalikan string tanpa offset, mis. "2026-10-23T11:29:20".
+    Nilainya disimpan dalam UTC -- `get_now_iso()` memakai `timezone.utc`.
+    Tanpa penanda zona, browser membacanya sebagai jam lokal WIB sehingga
+    tampil 7 jam lebih awal (dan bisa jadi tanggal kemarin untuk transaksi
+    dini hari).
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and "T" in value:
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+        if dt.tzinfo is None:
+            return value + "+00:00"
+    return value
+
+
+# Dipakai di semua field timestamp respons: string naive diperlakukan UTC.
+WaktuUTC = Annotated[datetime, BeforeValidator(_waktu_utc)]
+
 
 # WAJIB: muat .env SEBELUM membaca konfigurasi di bawah.
 # Tanpa ini os.getenv() selalu None dan backend berhenti dengan pesan
@@ -89,7 +119,23 @@ JWT_SECRET = JWT_SECRET.strip()
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))  # 7 hari
 
-supabase: Client = create_client(SUPABASE_URL, get_supabase_key())
+# Satu klien HTTP dipakai bersama oleh PostgREST/Auth/Storage. `http2=False`
+# bukan pilihan gaya: postgrest-py membuat httpx.Client(http2=True) sendiri, dan
+# di Windows HTTP/2 sync yang dipakai dari threadpool FastAPI sesekali gagal
+# dengan `[WinError 10035] a non-blocking socket operation could not be
+# completed immediately`. Gejalanya: /api/stats/admin, /api/stock, dan
+# /api/transaksi tiba-tiba 500 lalu normal lagi -- dashboard tampak kosong
+# padahal datanya ada. HTTP/1.1 dengan connection pool ini stabil.
+_http_supabase = httpx.Client(
+    http2=False,
+    timeout=httpx.Timeout(60.0, connect=10.0),
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+)
+supabase: Client = create_client(
+    SUPABASE_URL,
+    get_supabase_key(),
+    options=ClientOptions(httpx_client=_http_supabase),
+)
 
 app = FastAPI(title="Komang SAC API", version="0.1.0")
 
@@ -319,7 +365,7 @@ class ShoeUpdate(BaseModel):
 
 class ShoeResponse(ShoeBase):
     id: str
-    created_at: datetime
+    created_at: WaktuUTC
 
     class Config:
         from_attributes = True
@@ -413,9 +459,9 @@ class TransactionResponse(TransactionBase):
     # Diisi backend saat teknisi menandai Selesai (lihat update_transaksi_status).
     # Laporan omzet memakai kolom ini, bukan created_at, supaya cucian yang masuk
     # tanggal 31 dan selesai tanggal 2 tidak terpotong dua bulan.
-    selesai_at: Optional[datetime] = None
-    created_at: datetime
-    updated_at: Optional[datetime] = None
+    selesai_at: Optional[WaktuUTC] = None
+    created_at: WaktuUTC
+    updated_at: Optional[WaktuUTC] = None
 
     class Config:
         from_attributes = True
@@ -439,7 +485,7 @@ class ProfileUpdate(BaseModel):
 class ProfileResponse(ProfileBase):
     id: str
     is_verified: bool
-    created_at: datetime
+    created_at: WaktuUTC
 
     class Config:
         from_attributes = True
@@ -463,7 +509,7 @@ class DropPointUpdate(BaseModel):
 
 class DropPointResponse(DropPointBase):
     id: str
-    created_at: datetime
+    created_at: WaktuUTC
 
     class Config:
         from_attributes = True
@@ -519,8 +565,8 @@ class ExpenseUpdate(BaseModel):
 
 class ExpenseResponse(ExpenseBase):
     id: str
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: Optional[WaktuUTC] = None
+    updated_at: Optional[WaktuUTC] = None
 
     class Config:
         from_attributes = True
@@ -1583,6 +1629,7 @@ def analytics_summary(
     periode: str = "semua",
     bulan: Optional[int] = None,
     tahun: Optional[int] = None,
+    pakai_ai: bool = True,
     _: dict = Depends(require_role("admin")),
 ):
     """
@@ -1599,6 +1646,10 @@ def analytics_summary(
     ringkasan dan saran yang dihitung dari data langsung (sumber='fallback').
     Frontend menampilkan catatan penyebabnya, jadi tidak pernah menampilkan
     string kosong.
+
+    `pakai_ai=0` melewati pemanggilan AI sepenuhnya: respons cepat (hanya
+    query database) dan tetap membawa `fakta` untuk grafik. Frontend memakai
+    ini lebih dulu supaya grafik tidak ikut menunggu model bahasa.
     """
     p = _parse_periode(periode, bulan, tahun)
     try:
@@ -1608,6 +1659,7 @@ def analytics_summary(
             selesai=p["selesai"],
             granularitas=p["granularitas"],
             label_periode=p["label"],
+            pakai_ai=pakai_ai,
         )
     except Exception as exc:  # noqa: BLE001
         # Analytics tidak boleh menjatuhkan dashboard. Kembalikan facts kosong
@@ -2055,11 +2107,11 @@ def tracking_transaksi(request: Request, kode: str):
         "kode": trx.get("kode"),
         "status": trx["status"],
         "harga": trx["harga"],
-        "created_at": trx["created_at"],
-        "updated_at": trx.get("updated_at"),
+        "created_at": _waktu_utc(trx["created_at"]),
+        "updated_at": _waktu_utc(trx.get("updated_at")),
         # Tanggal selesai dicatat teknisi. Konsumen butuh ini untuk tahu kapan
         # cuciannya rampung, jadi sengaja ikut ke halaman publik.
-        "selesai_at": trx.get("selesai_at"),
+        "selesai_at": _waktu_utc(trx.get("selesai_at")),
         "catatan_konsumen": trx.get("catatan_konsumen"),
         "payment_method": trx.get("payment_method"),
         # Ada untuk booking multi-pasang: halaman status memakainya untuk
@@ -2126,13 +2178,24 @@ def update_transaksi_status(
         # sendiri dengan mengassign tech_id = id-nya.
         if current.get("tech_id") not in (None, user["id"]):
             raise HTTPException(403, "Transaksi ini bukan tugasmu")
-        if current.get("tech_id") is None:
-            update.tech_id = user["id"]
+        # Selalu paksa ke id sendiri, bukan hanya saat masih kosong:
+        # kalau dibiarkan, teknisi bisa mengirim tech_id orang lain lewat
+        # payload dan komisi jatuh ke pengerja yang salah.
+        update.tech_id = user["id"]
     else:
         raise HTTPException(403, "Kamu tidak punya akses untuk mengubah status")
 
     data = update.model_dump(exclude_unset=True)
     data["updated_at"] = get_now_iso()
+
+    # Komisi selalu mengikuti pengerja terkini. Jalur ini bisa mengisi
+    # tech_id untuk pertama kali (teknisi ambil tugas dari halaman status),
+    # jadi 40% harus dihitung di sini juga -- kalau tidak, transaksi yang
+    # diambil lewat jalur ini tersimpan dengan komisi 0.
+    if "tech_id" in data:
+        data["tech_commission"] = komisi_untuk(
+            current.get("harga") or 0, data.get("tech_id")
+        )
 
     # Tanggal selesai dicatat di sini, bukan dari frontend, supaya tidak bisa
     # dipalsukan dan selalu konsisten dengan kapan status benar-benar berubah.
@@ -2207,8 +2270,16 @@ def claim_transaksi(
     else:
         raise HTTPException(403, "Hanya teknisi atau admin yang bisa claim")
 
-    # Assign teknisi dan ubah status ke Diproses
-    data = {"tech_id": user["id"], "status": "Diproses", "updated_at": get_now_iso()}
+    # Assign teknisi dan ubah status ke Diproses. Komisi dihitung di sini
+    # juga: claim adalah jalur utama teknisi mengambil pekerjaan, dan tanpa
+    # baris tech_commission transaksi tersimpan dengan komisi 0 padahal
+    # pengerjanya teknisi (aturan 40%). Admin tetap 0 (kerja sendiri).
+    data = {
+        "tech_id": user["id"],
+        "status": "Diproses",
+        "tech_commission": komisi_untuk(trx.get("harga") or 0, user["id"]),
+        "updated_at": get_now_iso(),
+    }
 
     result = supabase.from_("transactions").update(data).eq("id", transaksi_id).execute()
     if not result.data:

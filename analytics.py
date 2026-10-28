@@ -266,7 +266,9 @@ def _label_bucket(kunci: str, granularitas: str) -> str:
             tgl = datetime.strptime(kunci, "%Y-%m-%d")
             return f"{tgl.day} {NAMA_BULAN_SINGKAT[tgl.month - 1]}"
         thn, bln = kunci.split("-")
-        return f"{NAMA_BULAN_SINGKAT[int(bln) - 1]} {thn[2:]}"
+        # Tahun ditulis lengkap: "Okt 26" gampang dibaca sebagai tanggal 26
+        # Oktober, padahal maksudnya Oktober 2026.
+        return f"{NAMA_BULAN_SINGKAT[int(bln) - 1]} {thn}"
     except (ValueError, IndexError):
         return kunci
 
@@ -1006,6 +1008,7 @@ def build_summary(
     selesai: Optional[datetime] = None,
     granularitas: str = "hari",
     label_periode: str = "Semua waktu",
+    pakai_ai: bool = True,
 ) -> dict[str, Any]:
     """
     Ringkasan + saran (AI atau fallback), disertai fakta untuk grafik.
@@ -1013,6 +1016,12 @@ def build_summary(
     Kontrak penting: `fakta` SELALU hasil perhitungan lokal, apa pun yang
     terjadi pada pemanggilan AI. Frontend menggambar grafik dari `fakta`,
     jadi grafik tidak pernah berubah karena alasan bahasa.
+
+    `pakai_ai=False` melewati OpenRouter sepenuhnya dan langsung memakai
+    ringkasan rule-based. Dipakai frontend untuk mengambil fakta/grafik
+    lebih dulu: panggilan AI bisa 45 detik, dan grafik tidak boleh ikut
+    menunggu selama itu (dulu seluruh respons -- termasuk fakta -- hilang
+    karena axios timeout 15 detik, sehingga grafik tampak kosong).
     """
     facts = gather_facts(
         supabase,
@@ -1025,7 +1034,7 @@ def build_summary(
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     models = _daftar_model()
 
-    if api_key:
+    if pakai_ai and api_key:
         # Coba model satu per satu: kalau yang pertama kena 429/404/timeout,
         # lanjut ke cadangan berikutnya sebelum menyerah ke rule-based.
         # Total tunggu dijaga ~TIMEOUT_DETIK: makin banyak cadangan, makin
@@ -1048,6 +1057,10 @@ def build_summary(
             f"{', '.join(models)} -- kuota habis, timeout, atau API key ditolak). "
             "Ringkasan dan saran di bawah dihitung dari data langsung."
         )
+    elif not pakai_ai:
+        # Fakta/grafik diminta tanpa AI (mode cepat). Bukan kegagalan, jadi
+        # jangan tampilkan peringatan apa pun.
+        alasan = None
     else:
         alasan = (
             "OPENROUTER_API_KEY belum diisi di .env, jadi ringkasan dan saran "

@@ -155,7 +155,8 @@ export const statsApi = {
  * Admin-only di backend.
  */
 export const analyticsApi = {
-  summary: (params) => api.get("/api/analytics/summary", { params }),
+  summary: (params, config) =>
+    api.get("/api/analytics/summary", { params, ...config }),
 };
 
 /* ------------------------------------------------------------------ */

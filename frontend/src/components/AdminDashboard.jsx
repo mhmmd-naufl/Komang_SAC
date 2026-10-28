@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Clock,
@@ -208,6 +208,10 @@ export default function AdminDashboard() {
   const [modeGrafik, setModeGrafik] = useState("jumlah");
   const [mengekspor, setMengekspor] = useState("");
 
+  // Nomor versi permintaan. Respons lama (mis. narasi AI untuk periode
+  // sebelumnya) tidak boleh menimpa data periode yang sedang tampil.
+  const versiRef = useRef(0);
+
   // Parameter backend dihitung sekali per perubahan periode, lalu dipakai lagi
   // oleh muat() dan oleh ekspor. Kalau dihitung di dua tempat, tidak ada
   // jaminan keduanya benar-benar sama -- dan laporan yang diekspor berbeda dari
@@ -217,14 +221,18 @@ export default function AdminDashboard() {
 
   const muat = useCallback(
     async (diam = false) => {
+      const versi = ++versiRef.current;
       if (diam) setMemuatAi(true);
       else setLoading(true);
       setError(null);
       try {
-        // Backend expect single integer untuk bulan/tahun, bukan array.
-        // Kalau multi-select, kirim periode=semua (tanpa filter bulan/tahun).
+        // Backend butuh `periode` eksplisit: tanpa itu, `bulan`/`tahun` diabaikan
+        // dan yang dihitung adalah SEMUA waktu (grafik jadi satu batang per
+        // bulan, mis. "Okt 2026", bukan rincian harian Oktober).
+        // Backend masih menerima satu bulan/tahun, jadi multi-select jatuh ke
+        // semua waktu.
         const p = (param.bulan?.length === 1 && param.tahun?.length === 1)
-          ? { bulan: param.bulan[0], tahun: param.tahun[0] }
+          ? { periode: 'bulan', bulan: param.bulan[0], tahun: param.tahun[0] }
           : { periode: 'semua' };
 
         // Core dashboard diambil dari endpoint gabungan supaya satu refresh
@@ -234,6 +242,7 @@ export default function AdminDashboard() {
           transactionsApi.list({ limit: 8 }),
           stockApi.list({ low_stock: true }),
         ]);
+        if (versi !== versiRef.current) return;
 
         setData({
           ringkasan: dashboard?.data?.ringkasan || dashboard?.data || RINGKASAN_KOSONG,
@@ -241,17 +250,44 @@ export default function AdminDashboard() {
           stok_menipis: Array.isArray(stock.data) ? stock.data : [],
         });
 
-        // Analytics boleh gagal: panel AI menampilkan penyebabnya, sementara
-        // angka dan grafik di atasnya tetap valid. Jadi dipisah try/catch-nya.
+        // FASE 1 -- fakta & grafik tanpa AI. Ini yang mengisi chart; sengaja
+        // tidak menunggu OpenRouter, karena model gratis bisa 45 detik dan
+        // dulu membuat seluruh respons (termasuk fakta) kena timeout axios
+        // 15 detik sehingga grafik tampak kosong.
         try {
-          const analitik = await analyticsApi.summary(p);
-          setAi(analitik.data);
+          const cepat = await analyticsApi.summary(
+            { ...p, pakai_ai: 0 },
+            { timeout: 20000 },
+          );
+          if (versi !== versiRef.current) return;
+          setAi(cepat.data);
           setErrorAi(null);
         } catch (errAi) {
+          if (versi !== versiRef.current) return;
           setAi(null);
           setErrorAi(errAi?.friendlyMessage || "Gagal memuat ringkasan.");
         }
+
+        // FASE 2 -- narasi AI menyusul di latar belakang. Grafik sudah tampil
+        // dari fase 1; kalau AI gagal/lambat, cukup panel narasi yang
+        // menampilkan catatan, angka tetap utuh.
+        setMemuatAi(true);
+        analyticsApi
+          .summary({ ...p, pakai_ai: 1 }, { timeout: 60000 })
+          .then(({ data }) => {
+            if (versi !== versiRef.current) return;
+            setAi(data);
+            setErrorAi(null);
+          })
+          .catch((errAi) => {
+            if (versi !== versiRef.current) return;
+            setErrorAi(errAi?.friendlyMessage || "Ringkasan AI tidak tersedia.");
+          })
+          .finally(() => {
+            if (versi === versiRef.current) setMemuatAi(false);
+          });
       } catch (err) {
+        if (versi !== versiRef.current) return;
         // 403/401 = sesi tidak valid, biarkan interceptor yang tangani. Jadi
         // di sini cuma error lain yang perlu ditampilkan, dan dashboard harus
         // tetap tampil dengan angka nol -- layar kosong lebih buruk daripada
@@ -259,8 +295,7 @@ export default function AdminDashboard() {
         setError(err?.friendlyMessage || "Gagal memuat data dashboard.");
         setErrorAi(null);
       } finally {
-        setLoading(false);
-        setMemuatAi(false);
+        if (versi === versiRef.current) setLoading(false);
       }
     },
     [param],
@@ -558,7 +593,11 @@ export default function AdminDashboard() {
               `${d.label}: ${d.jumlah} pekerjaan, ${formatRupiah(d.omzet)}`
             }
             satuanTotal={pakaiOmzet ? "rupiah" : "pekerjaan"}
-            kosong={`Belum ada pekerjaan yang selesai pada ${label}.`}
+            kosong={
+              loading
+                ? "Memuat grafik…"
+                : `Belum ada pekerjaan yang selesai pada ${label}.`
+            }
           />
         </div>
       </div>

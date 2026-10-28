@@ -144,21 +144,26 @@ export default function StatusTracker() {
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [kodeDipantau, sudahFinal, pollingBerhenti, cari])
 
-  // Link /status?kode=KS-XXXXXX (dari halaman akun atau setelah booking)
-  // langsung mengisi form dan mencari -- konsumen tidak mengetik ulang kodenya.
+  // Link /status?kode=KS-XXXXXX (dari halaman akun, setelah booking, atau
+  // tombol Lacak lain) langsung mengisi form dan mencari -- konsumen tidak
+  // mengetik ulang kodenya. Dependensi `searchParams` penting: dulu efek ini
+  // hanya jalan sekali saat mount, jadi berpindah kode saat sudah berada di
+  // halaman status tidak memicu pencarian baru.
   useEffect(() => {
     const dariUrl = searchParams.get('kode')
     if (dariUrl) {
       setCode(dariUrl)
       cari(dariUrl)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [searchParams, cari])
 
   const handleSearch = (e) => {
     e.preventDefault()
-    setSearchParams(code.trim() ? { kode: code.trim().toUpperCase() } : {})
-    cari(code)
+    const kode = code.trim().toUpperCase()
+    if (!kode) return
+    // Kalau kode di URL sama, effect di atas tidak jalan -- cari langsung.
+    if (searchParams.get('kode') === kode) cari(kode)
+    else setSearchParams({ kode })
   }
 
   const currentStep = result ? FLOW.indexOf(result.status) : -1

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { X, CheckCircle, Clock, Copy, Footprints, MessageSquare, Phone, Plus, User } from 'lucide-react'
 import { transactionsApi, dropPointsApi, configApi, shoesApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
@@ -290,12 +290,12 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
           </p>
 
           <div className="space-y-2">
-            <a
-              href={`/status?kode=${encodeURIComponent(hasilBooking[0]?.kode || '')}`}
+            <Link
+              to={`/status?kode=${encodeURIComponent(hasilBooking[0]?.kode || '')}`}
               className="btn-primary w-full"
             >
               Lacak Sekarang
-            </a>
+            </Link>
             <a
               href={`https://wa.me/${waAdmin}?text=${encodeURIComponent(
                 `Halo Komang SAC, saya baru booking ${semuaKode}.`

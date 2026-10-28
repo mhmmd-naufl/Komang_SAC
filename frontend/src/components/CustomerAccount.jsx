@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Footprints,
   Search,
@@ -314,12 +315,12 @@ export default function CustomerAccount() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <a
-                        href={`/status?kode=${encodeURIComponent(t.kode)}`}
+                      <Link
+                        to={`/status?kode=${encodeURIComponent(t.kode)}`}
                         className="btn-secondary px-3 py-1.5 text-xs"
                       >
                         Lacak <ChevronRight className="h-3 w-3" />
-                      </a>
+                      </Link>
                       <button
                         onClick={() => window.open(linkWa('628980570911', templateLacak(t)), '_blank')}
                         className="btn-primary px-3 py-1.5 text-xs"
