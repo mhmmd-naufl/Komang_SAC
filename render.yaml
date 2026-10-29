@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: komang-sac-backend
+    env: python
+    region: singapore  # Pilih region terdekat (singapore untuk Indonesia)
+    plan: Free tier      # Free tier atau starter ($7/bulan)
+    
+    buildCommand: |
+      pip install -r requirements.txt
+    
+    startCommand: |
+      uvicorn main:app --host 0.0.0.0 --port $PORT
+    
+    envVars:
+      # Variabel wajib - isi di dashboard Render
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: BUSINESS_NAME
+        value: "Komang SAC"
+      - key: BUSINESS_PHONE
+        sync: false
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
