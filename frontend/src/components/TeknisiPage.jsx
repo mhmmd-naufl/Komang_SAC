@@ -16,6 +16,7 @@ import { getStatusConfig, formatDateTime, cn } from "../utils/helpers";
 import { tanggalWib } from "../utils/periode";
 import { toast } from "./Toast";
 import { SearchInput } from "./AdminUi";
+import LihatFoto from "./LihatFoto";
 
 /**
  * Halaman Teknisi.
@@ -151,14 +152,14 @@ function PhotoUpload({ transaksi, jenis, label, wajib, onUpload }) {
           </p>
       </label>
       {hasPhoto && (
-        <a
-          href={transaksi[jenis === "before" ? "photo_before" : jenis === "after" ? "photo_after" : "photo_defect"]}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-2 inline-flex items-center gap-1 text-xs text-primary-600 hover:underline"
+        <LihatFoto
+          src={transaksi[jenis === "before" ? "photo_before" : jenis === "after" ? "photo_after" : "photo_defect"]}
+          alt={label}
         >
-          <span>Lihat foto</span>
-        </a>
+          <span className="mt-2 inline-flex items-center gap-1 text-xs text-primary-600 hover:underline">
+            <span>Lihat foto</span>
+          </span>
+        </LihatFoto>
       )}
     </div>
   );

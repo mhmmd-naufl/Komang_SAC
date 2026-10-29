@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { ChevronDown, Footprints, X } from 'lucide-react'
-import { formatRupiah, cn } from '../utils/helpers'
+import { formatRupiah, hargaLayanan, cn } from '../utils/helpers'
 import { shoesApi } from '../services/api'
 
 // Logo biru sebagai default image untuk layanan
@@ -96,9 +96,14 @@ export default function Catalog({ onSelectShoe }) {
         // Keterangan diambil dari varian pertama yang menuliskannya.
         keterangan: varian.map((v) => v.keterangan_treatment).find(Boolean) || null,
         treatment: varian[0]?.jenis_treatment || null,
-        // Rentang harga: varian termurah vs termahal di kartu ini.
-        termurah: Math.min(...varian.map((v) => v.harga_cuci ?? 0)),
-        termahal: Math.max(...varian.map((v) => v.harga_cuci ?? 0)),
+        // Rentang harga kartu DARI HARGA MASTER, bukan harga_cuci. Dulu
+        // ringkasannya pakai harga_cuci, sehingga kartu Shoes Repaint tampil
+        // "Rp50.000 - Rp110.000" padahal daftar resminya Rp80.000 - Rp200.000:
+        // angka 50rb itu harga Midsole, kartu layanan lain di kartu ini malah
+        // terpotong sebagian. harga_min/harga_max inilah yang dicatat ke
+        // transaksi saat booking, jadi ringkasan kartu harus menampilkan itu.
+        termurah: Math.min(...varian.map((v) => v.harga_min ?? v.harga_cuci ?? 0)),
+        termahal: Math.max(...varian.map((v) => v.harga_max ?? v.harga_cuci ?? 0)),
       }))
       .sort((a, b) => a.nama.localeCompare(b.nama))
   }, [tampil])
@@ -234,7 +239,7 @@ export default function Catalog({ onSelectShoe }) {
                             {v.model || k.nama}
                           </span>
                           <span className="shrink-0 text-sm font-semibold text-primary-700">
-                            {formatRupiah(v.harga_cuci)}
+                            {hargaLayanan(v).teks}
                           </span>
                         </button>
                       ))}

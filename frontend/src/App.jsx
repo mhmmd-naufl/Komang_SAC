@@ -88,16 +88,17 @@ const STEPS = [
   },
 ];
 
+// TIDAK ada alamat/jalan di sini, dan itu disengaja: daftar jalan yang
+// di-hardcode cepat usang dan dulu malah tampil di pilihan outlet mau pun
+// beranda. Lokasi lengkap dijelaskan admin lewat WhatsApp saat konfirmasi.
 const DROP_POINTS = [
   {
     name: "Outlet Utama",
-    sub: "Jl. Cisadane No.3",
-    addr: "Lingkungan Mojoroto R, Singonegaran, Kec. Banyuwangi, Kabupaten Banyuwangi, Jawa Timur 68415",
+    sub: "Outlet utama Komang SAC",
   },
   {
     name: "Dolay Cut",
     sub: "Mitra drop point",
-    addr: "Jl. Kyai Haji Wahid Hasyim No. 76, Kabupaten Banyuwangi",
   },
 ];
 
@@ -222,7 +223,6 @@ function HomePage() {
                     <p className="text-xs text-slate-500">{dp.sub}</p>
                   </div>
                 </div>
-                <p className="text-sm text-slate-600">{dp.addr}</p>
               </div>
             ))}
           </div>

@@ -304,7 +304,11 @@ DAFTAR_HARGA = [
     },
     {
         "kelompok": KELOMPOK_REPAINT,
-        "jenis_treatment": "Shoes Reglue",
+        # Jahit Sol adalah treatment sendiri, bukan varian "Shoes Reglue".
+        # Dulu jenis_treatment-nya "Shoes Reglue" sehingga di katalog dia
+        # muncul melebur ke dalam kartu Reglue dan rentang harga kartunya
+        # jadi salah (Rp25.000 - Rp120.000 untuk dua treatment berbeda).
+        "jenis_treatment": "Jahit Sol",
         "merk": "Jahit Sol",
         "model": "Standar",
         "harga_cuci": 25000,

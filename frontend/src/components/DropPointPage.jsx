@@ -343,7 +343,7 @@ export default function DropPointPage() {
                           {formatDateTime(t.created_at)}
                         </td>
                         <td className="px-4 py-3 text-right font-medium text-slate-700">
-                          {formatRupiah(t.harga)}
+                          {formatRupiah(Math.max((t.harga || 0) - (t.diskon || 0), 0))}
                         </td>
                         <td className="px-5 py-3 text-right">
                           {siap ? (
@@ -382,7 +382,7 @@ export default function DropPointPage() {
                           {t.customer?.full_name &&
                             `${t.customer.full_name} · `}
                           {formatDateTime(t.created_at)} ·{" "}
-                          {formatRupiah(t.harga)}
+                          {formatRupiah(Math.max((t.harga || 0) - (t.diskon || 0), 0))}
                         </p>
                       </div>
                     </div>

@@ -256,6 +256,41 @@ BEGIN
 END $$;
 
 -- =============================================================
+-- [14] transactions: jenis_sepatu (wajib saat order) + diskon
+-- -------------------------------------------------------------
+-- 1. jenis_sepatu : JENIS/bahan sepatu yang dititipkan (Sneakers, Canvas,
+--    Leather, ...), dipilih konsumen di form booking. WAJIB menurut kode
+--    create, tapi bukan "NOT NULL" di database karena baris lama tidak
+--    punya nilainya.
+-- 2. nama_sepatu  : merk/nama sepatunya (cth. "Nike Air Force 1 putih"),
+--    diisi konsumen di form booking, wajib juga.
+-- 3. diskon       : potongan harga yang ditetapkan admin lewat endpoint
+--    finalisasi harga. NULL = belum pernah diatur (diperlakukan 0).
+--    Komisi teknisi dihitung dari harga bersih (harga - diskon), bukan
+--    harga kotor, supaya promo tidak ikut memotong komisi pengerja.
+-- =============================================================
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS jenis_sepatu TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS nama_sepatu TEXT;
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS diskon INTEGER;
+
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_diskon_check;
+ALTER TABLE transactions
+    ADD CONSTRAINT transactions_diskon_check CHECK (
+        diskon IS NULL OR (diskon >= 0 AND diskon <= harga)
+    );
+
+-- Data reglue lama: "Jahit Sol" sempat diisin jenis_treatment
+-- "Shoes Reglue", jadi di katalog dia muncul sebagai varian di dalam kartu
+-- Reglue dan rentang harga kartunya jadi kacau. Jahit Sol itu treatment
+-- sendiri. Aman diulang.
+UPDATE shoes
+SET jenis_treatment = 'Jahit Sol'
+WHERE merk = 'Jahit Sol'
+  AND (jenis_treatment IS NULL OR jenis_treatment = 'Shoes Reglue');
+
+-- =============================================================
 -- [8] RLS (opsional — JANGAN aktifkan sebelum backend pakai
 --     service-role key, atau semua request dari frontend akan 401)
 -- =============================================================

@@ -18,6 +18,26 @@ const LOGO_LAYANAN = '/assets/logo-biru.png'
 // hanya informasinya -- read-only. Kalau treatment mau diubah, pilih layanan
 // lain di katalog, jangan mengarang harga sendiri.
 
+// JENIS barang per sebutan. Konsumen bisa titip bukan cuma sepatu -- tas,
+// helm, dan topi ada di kelompok katalog sendiri -- makanya pilihan jenis
+// menyesuaikan barang yang dipilih di katalog, bukan terkunci ke sepatu.
+const JENIS_BARANG = {
+  sepatu: ['Sneakers', 'Canvas', 'Leather', 'Suede', 'Boots', 'Sandal', 'Lainnya'],
+  sandal: ['Sandal Jepit', 'Sandal Kulit', 'Slipper', 'Lainnya'],
+  tas: ['Backpack', 'Sling Bag', 'Tote Bag', 'Dompet', 'Lainnya'],
+  helm: ['Fullface', 'Half Face', 'Modular', 'Open Face', 'Lainnya'],
+  topi: ['Bucket', 'Beanie', 'Baseball', 'Lainnya'],
+}
+
+// Contoh isi untuk placeholder nama, ikut sebutan barangnya.
+const CONTOH_NAMA = {
+  sepatu: 'Nike Air Force 1 putih, size 43',
+  sandal: 'Adidas Adilette biru',
+  tas: 'Tas Eiger Yonder hitam',
+  helm: 'Helm Cargloss Fullface',
+  topi: 'Bucket hat navy',
+}
+
 const LABEL_BAYAR = {
   tunai: 'Tunai di tempat',
   transfer: 'Transfer Bank',
@@ -48,6 +68,44 @@ function namaLayanan(item) {
   return [item?.merk, item?.model].filter(Boolean).join(' ')
 }
 
+/**
+ * Sebutan barang dari master layanan yang dipilih: 'sepatu', 'tas', 'helm',
+ * 'topi', atau 'sandal'.
+ *
+ * Dipakai untuk label field booking ("Jenis Sepatu" vs "Jenis Tas") serta
+ * daftar pilihan jenisnya -- ciri-ciri barang dinilai dari nama layanan
+ * (merk/model) dan kelompoknya. Urutan pengecekan anti kejar-kejaran:
+ * kelompok "Bag, Hat & Helmet" memuat kata 'bag' DAN 'hat'; yang turnya
+ * dulu menentukan, jadi makanya cek spesifik pelanggan dulu (sandal ->
+ * topi -> helm -> tas) sebelum jatuh ke sepatu.
+ */
+function sebutanBarang(layanan) {
+  const teks = `${layanan?.merk || ''} ${layanan?.model || ''} ${layanan?.kelompok || ''}`.toLowerCase()
+  if (/sandal|slipper|sipit/.test(teks)) return 'sandal'
+  if (/topi|hat/.test(teks)) return 'topi'
+  if (/helm|helmet/.test(teks)) return 'helm'
+  if (/tas|bag/.test(teks)) return 'tas'
+  return 'sepatu'
+}
+
+/**
+ * Siapkan satu pasang: master layanan + kolom sepatu yang diisi konsumen.
+ *
+ * Data sepatu (jenis + nama) menempel PER PASANG, bukan sekali untuk seluruh
+ * booking -- satu konsumen sering titip dua pasang beda merk, dan kalau
+ * nilainya di-copy semua pasang, datanya tercatat salah: teknisi mencari
+ * "Vans Old Skool" padahal di rak ada "Nike AF1". itemsProp dari
+ * sessionStorage bisa memuat field itu kalau konsumen sempat mengisinya
+ * sebelum dialihkan ke login; NaN/undefined digas jadi string kosong.
+ */
+function siapkanPasang(layanan) {
+  return {
+    ...layanan,
+    jenis_sepatu: layanan?.jenis_sepatu || '',
+    nama_sepatu: layanan?.nama_sepatu || '',
+  }
+}
+
 export default function BookingModal({ shoe, items: itemsProp, onClose, onSuccess }) {
   const { user, isAuthenticated } = useAuth()
   const navigate = useNavigate()
@@ -56,8 +114,8 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
   // sekaligus; tiap pasang tetap jadi transaksi sendiri (status pengerjaan
   // memang per pasang), diikat oleh grup_id yang sama.
   const [items, setItems] = useState(() => {
-    if (itemsProp?.length) return itemsProp
-    return shoe ? [shoe] : []
+    if (itemsProp?.length) return itemsProp.map(siapkanPasang)
+    return shoe ? [siapkanPasang(shoe)] : []
   })
 
   const [step, setStep] = useState(1) // 1: Form, 2: Konfirmasi, 3: Selesai
@@ -75,7 +133,7 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
   })
 
   useEffect(() => {
-    if (!itemsProp?.length) setItems(shoe ? [shoe] : [])
+    if (!itemsProp?.length) setItems(shoe ? [siapkanPasang(shoe)] : [])
   }, [shoe, itemsProp])
 
   const muatDropPoints = useCallback(() => {
@@ -136,9 +194,11 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
   const tanggalEstimasi = estimasiTanggal(estimasiHari)
 
   // Harga per item + total. Resolved lewat helper yang sama supaya tampilan
-  // langkah 1 dan 2 tidak pernah berbeda untuk layanan yang sama.
+  // langkah 1 dan 2 tidak pernah berbeda untuk layanan yang sama. `sebutan`
+  // ikut: label field barang di form mengikuti barang pasangnya (sepatu /
+  // tas / helm / topi / sandal).
   const rincianHarga = useMemo(
-    () => items.map((item) => ({ item, harga: hargaLayanan(item) })),
+    () => items.map((item) => ({ item, harga: hargaLayanan(item), sebutan: sebutanBarang(item) })),
     [items]
   )
   const totalHarga = rincianHarga.reduce((acc, r) => acc + (r.harga.jumlah || 0), 0)
@@ -146,11 +206,21 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
 
   const tambahPasang = (id) => {
     const ditemukan = katalog.find((s) => s.id === id)
-    if (ditemukan) setItems((prev) => [...prev, ditemukan])
+    if (ditemukan) setItems((prev) => [...prev, siapkanPasang(ditemukan)])
   }
 
   const hapusPasang = (indeks) =>
     setItems((prev) => prev.filter((_, i) => i !== indeks))
+
+  // Isi jenis/nama sepatu satu pasang. Field-nya hidup di dalam objek
+  // pasang (items[i]) supaya tiap pasang punya datanya sendiri.
+  const ubahPasang = (indeks, field, nilai) => {
+    setItems((prev) =>
+      prev.map((it, i) => (i === indeks ? { ...it, [field]: nilai } : it)),
+    )
+    const kunciError = `pasang-${indeks}-${field}`
+    if (errors[kunciError]) setErrors((prev) => ({ ...prev, [kunciError]: '' }))
+  }
 
   const handleChange = (e) => {
     const { name, value } = e.target
@@ -171,6 +241,15 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
   const validate = () => {
     const next = {}
     if (!items.length || items.some((i) => !i?.id)) next.shoe = 'Pilih layanan dulu dari katalog di halaman utama'
+    // Jenis + nama barang wajib PER PASANG, dan ikut barangnya: label di
+    // pasang sepatus bilang sepatu, di pasang tas bilang tas (sebutanBarang).
+    items.forEach((item, i) => {
+      if (!item?.id) return
+      const sebutan = sebutanBarang(item)
+      if (!item.jenis_sepatu) next[`pasang-${i}-jenis_sepatu`] = `Pilih jenis ${sebutan} yang dititip`
+      if (!String(item.nama_sepatu || '').trim())
+        next[`pasang-${i}-nama_sepatu`] = `Nama ${sebutan} wajib diisi`
+    })
     if (!isAuthenticated) next.auth = 'Kamu harus masuk dulu untuk membuat booking'
     if (!formData.drop_point_id) next.drop_point_id = 'Pilih drop point'
     setErrors(next)
@@ -203,6 +282,8 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
           // Dikirim harga terendah supaya tidak menyesatkan kalau nanti ada
           // endpoint lain yang membaca payload ini apa adanya.
           harga: hargaLayanan(item).jumlah,
+          jenis_sepatu: item.jenis_sepatu,
+          nama_sepatu: String(item.nama_sepatu || '').trim(),
           catatan_konsumen: formData.catatan || null,
           payment_method: formData.payment,
           grup_id: grup,
@@ -322,7 +403,7 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 animate-fade-in">
       <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto animate-slide-up">
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
+        <div className="sticky top-0 bg-white border-b border-slate-200 px-4 sm:px-6 py-4 flex items-center justify-between z-10">
           <div>
             <h2 className="text-lg font-bold text-slate-900">Booking Layanan</h2>
             <p className="text-sm text-slate-500">Langkah {step} dari 2</p>
@@ -353,7 +434,7 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-5">
           {/* Login gate */}
           {!isAuthenticated && (
             <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800">
@@ -373,13 +454,16 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
             <>
               <div>
                 <span className="label">Layanan ({items.length} pasang)</span>
+                <p className="text-xs text-slate-500 -mt-1 mb-2">
+                  Isi <strong>jenis &amp; nama barang di tiap pasang</strong> — labelnya menyesuaikan barangnya (sepatu, tas, helm, dst).
+                </p>
                 {items.length === 0 ? (
                   <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
                     Belum ada layanan dipilih. Tutup ini lalu pilih layanan di katalog.
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {rincianHarga.map(({ item, harga }, i) => (
+                    {rincianHarga.map(({ item, harga, sebutan }, i) => (
                       <div key={`${item.id}-${i}`} className="bg-primary-50 border border-primary-100 rounded-xl p-3.5 flex items-start gap-3">
                         <div className="h-9 w-9 rounded-xl bg-white border border-primary-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
                           <img
@@ -402,6 +486,53 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
                           <p className="text-[11px] text-slate-500">
                             ±{item.estimasi_hari || ESTIMASI_DEFAULT} hari kerja
                           </p>
+                          {/* Data barang PER PASANG, wajib sebelum tombol
+                              booking. Label + pilihan jenis menyesuaikan
+                              barangnya: pasang sepatus bilang "Jenis
+                              Sepatu", pasang tas bilang "Jenis Tas", dst --
+                              beda-pasang beda barang tetap jalan di satu
+                              booking yang sama. */}
+                          {/* Input hemat ruang di HP: satu kolom di layar
+                              kecil, dua kolom mulai tablet (sm). Dulu selalu
+                              2 kolom -- dropdown jenis sepatu sempit minta
+                              ampun di layar 360px. */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                            <select
+                              value={item.jenis_sepatu || ''}
+                              onChange={(e) => ubahPasang(i, 'jenis_sepatu', e.target.value)}
+                              className={cn(
+                                'input !py-1.5 text-xs',
+                                errors[`pasang-${i}-jenis_sepatu`] && 'input-error',
+                              )}
+                              aria-label={`Jenis ${sebutan} pasang ${i + 1}`}
+                            >
+                              <option value="">Jenis {sebutan}...</option>
+                              {(JENIS_BARANG[sebutan] || JENIS_BARANG.sepatu).map((j) => (
+                                <option key={j} value={j}>
+                                  {j}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              type="text"
+                              value={item.nama_sepatu || ''}
+                              onChange={(e) => ubahPasang(i, 'nama_sepatu', e.target.value)}
+                              className={cn(
+                                'input !py-1.5 text-xs',
+                                errors[`pasang-${i}-nama_sepatu`] && 'input-error',
+                              )}
+                              placeholder={CONTOH_NAMA[sebutan] || CONTOH_NAMA.sepatu}
+                              maxLength={100}
+                              aria-label={`Nama ${sebutan} pasang ${i + 1}`}
+                            />
+                          </div>
+                          {(errors[`pasang-${i}-jenis_sepatu`] ||
+                            errors[`pasang-${i}-nama_sepatu`]) && (
+                            <p className="text-[11px] text-rose-600 mt-1">
+                              {errors[`pasang-${i}-jenis_sepatu`] ||
+                                errors[`pasang-${i}-nama_sepatu`]}
+                            </p>
+                          )}
                         </div>
                         {items.length > 1 && (
                           <button
@@ -449,6 +580,9 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
               </div>
 
               <div>
+                {/* Tidak menampilkan alamat/street di sini: daftar jalan yang
+                    panjang justru bikin susah menandai satu outlet, dan datanya
+                    sering berubah. Cukup nama outlet. */}
                 <label htmlFor="drop_point_id" className="label">Titik Penjemputan *</label>
                 {dropError ? (
                   <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
@@ -468,7 +602,7 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
                     <option value="">Pilih drop point</option>
                     {dropPoints.map((dp) => (
                       <option key={dp.id} value={dp.id}>
-                        {dp.nama} — {dp.alamat}
+                        {dp.nama}
                       </option>
                     ))}
                   </select>
@@ -528,10 +662,18 @@ export default function BookingModal({ shoe, items: itemsProp, onClose, onSucces
                     <Footprints className="h-5 w-5 text-primary-600" /> Detail Layanan ({items.length} pasang)
                   </h3>
                   <div className="space-y-2.5 text-sm">
-                    {rincianHarga.map(({ item, harga }, i) => (
+                    {rincianHarga.map(({ item, harga, sebutan }, i) => (
                       <div key={`${item.id}-${i}`} className="flex justify-between gap-4">
                         <span className="text-slate-600">
                           {namaLayanan(item)}
+                          {/* Nama + jenis sepatu pasang ini, persis yang
+                              dikirim ke transaksi-nya sendiri di backend. */}
+                          {item.nama_sepatu && (
+                            <span className="block text-[11px] text-slate-500">
+                              {item.nama_sepatu}
+                              {item.jenis_sepatu ? ` · ${item.jenis_sepatu}` : ''}
+                            </span>
+                          )}
                           <span className="block text-[11px] text-slate-400">
                             {item.jenis_treatment} · ±{item.estimasi_hari || ESTIMASI_DEFAULT} hari
                           </span>

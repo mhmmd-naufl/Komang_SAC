@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ArrowRight,
+  BadgePercent,
   Camera,
   Check,
   Download,
@@ -23,6 +24,7 @@ import { transactionsApi, usersApi, shoesApi } from '../../services/api'
 import { toast } from '../Toast'
 import Pagination from '../Pagination'
 import Modal, { Field, GagalMuat, Kosong, Memuat, SearchInput } from '../AdminUi'
+import LihatFoto from '../LihatFoto'
 import PanelProsesAdmin from './AdminPanelProcess'
 const STATUS = ['Diterima', 'Diproses', 'Diperiksa', 'Selesai', 'Siap diambil']
 const URUT = [
@@ -44,11 +46,15 @@ const KOLOM_CSV = [
   { judul: 'No. WhatsApp Pelanggan', nilai: (t) => t.customer?.phone || '' },
   { judul: 'Layanan', nilai: (t) => t.shoe?.merk || '' },
   { judul: 'Varian', nilai: (t) => t.shoe?.model || '' },
+  { judul: 'Jenis Barang', nilai: (t) => t.jenis_sepatu || '' },
+  { judul: 'Nama Barang', nilai: (t) => t.nama_sepatu || '' },
   { judul: 'Kelompok', nilai: (t) => t.shoe?.kelompok || '' },
   { judul: 'Treatment', nilai: (t) => t.shoe?.jenis_treatment || '' },
   { judul: 'Teknisi', nilai: (t) => t.tech?.full_name || '' },
   { judul: 'Status', kunci: 'status' },
   { judul: 'Harga', kunci: 'harga', nilai: (t) => t.harga ?? '' },
+  { judul: 'Diskon', kunci: 'diskon', nilai: (t) => t.diskon ?? 0 },
+  { judul: 'Harga Bersih', nilai: (t) => hargaBersih(t) },
   { judul: 'Komisi Teknisi', kunci: 'tech_commission', nilai: (t) => t.tech_commission ?? '' },
   { judul: 'Catatan Konsumen', kunci: 'catatan_konsumen', nilai: (t) => t.catatan_konsumen || '' },
   { judul: 'Catatan Teknisi', kunci: 'defect_notes', nilai: (t) => t.defect_notes || '' },
@@ -58,6 +64,11 @@ const KOLOM_CSV = [
     nilai: (t) => (t.updated_at ? formatDateTime(t.updated_at) : ''),
   },
 ]
+
+// Kolom CSV dan tampilan lain selalu memakai harga BERSIH (harga - diskon).
+function hargaBersih(transaksi) {
+  return Math.max((transaksi?.harga || 0) - (transaksi?.diskon || 0), 0)
+}
 
 /** Bangun tautan wa.me. Nomor harus tanpa tanda +, spasi, atau tanda hubung. */
 export function tautanWa(nomor, pesan) {
@@ -80,6 +91,7 @@ export function pesanWa(t) {
   const nama = t.customer?.full_name?.trim() || ''
   const layanan = [t.shoe?.merk, t.shoe?.model].filter(Boolean).join(' ') || 'Cuci sepatu'
   const metode = String(t.payment_method || '').replace(/_/g, ' ').trim()
+  const potongan = t.diskon || 0
   return [
     `Halo${nama ? ` ${nama}` : ''},`,
     '',
@@ -87,7 +99,14 @@ export function pesanWa(t) {
     '',
     'Invoice',
     `Layanan: ${layanan}`,
-    `Harga: ${formatRupiah(t.harga)}`,
+    ...(t.nama_sepatu ? [`Barang: ${t.nama_sepatu} (${t.jenis_sepatu || 'jenis tidak tercatat'})`] : []),
+    ...(potongan > 0
+      ? [
+          `Subtotal: ${formatRupiah(t.harga)}`,
+          `Diskon: -${formatRupiah(potongan)}`,
+          `Total Bayar: ${formatRupiah(hargaBersih(t))}`,
+        ]
+      : [`Harga: ${formatRupiah(t.harga)}`]),
     ...(metode ? [`Pembayaran: ${metode.toUpperCase()}`] : []),
     '',
     'Silakan ambil di outlet pada jam buka.',
@@ -174,6 +193,79 @@ export default function AdminTransaksi() {
       toast.error('Gagal mengganti pengerja', err.friendlyMessage || err.message)
     } finally {
       setSimpanGanti(false)
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Atur diskon langsung dari baris tabel (opsi cepat admin).
+  //   - nominal (Rp)  -> angka langsung, cth. 10000
+  //   - persen (%)    -> dihitung dari harga tercatat, cth. 10 = 10%
+  // Backend menerima diskon lewat endpoint finalisasi harga; harga dikirim
+  // apa adanya (tidak diubah), komisi dihitung ulang dari harga bersih.
+  // Status "Siap diambil" dibiarkan backend yang menolak -- aturan yang
+  // sama untuk semua perubahan harga agar tidak jadi dua sumber kebenaran.
+  // ------------------------------------------------------------------
+  const [diskonRow, setDiskonRow] = useState(null)
+  const [modeDiskon, setModeDiskon] = useState('rp') // 'rp' | 'persen'
+  const [nilaiDiskon, setNilaiDiskon] = useState('')
+  const [simpanDiskon, setSimpanDiskon] = useState(false)
+  const [errorDiskon, setErrorDiskon] = useState('')
+
+  const bukaDiskon = (t) => {
+    setDiskonRow(t.id)
+    setModeDiskon('rp')
+    setNilaiDiskon(t.diskon ? String(t.diskon) : '')
+    setErrorDiskon('')
+  }
+  const tutupDiskon = () => {
+    setDiskonRow(null)
+    setSimpanDiskon(false)
+    setErrorDiskon('')
+  }
+
+  /**
+   * Ubah input admin jadi nominal rupiah. `null` = belum valid.
+   * Persen di-clamp 0..100, rupiah di-clamp maksimal harga -- yang
+   * di database selalu masuk akal walau admin salah ketik.
+   */
+  const hitungDiskon = (t, mode, nilai) => {
+    const mentah = String(nilai ?? '').trim()
+    if (mentah === '') return 0
+    const angka = Number(mentah)
+    if (!Number.isFinite(angka) || angka < 0) return null
+    const harga = t.harga || 0
+    if (mode === 'persen') {
+      if (angka > 100) return null
+      return Math.min(Math.round((harga * angka) / 100), harga)
+    }
+    return Math.min(Math.round(angka), harga)
+  }
+
+  const simpanDiskonAdmin = async (t) => {
+    if (simpanDiskon) return
+    const nominal = hitungDiskon(t, modeDiskon, nilaiDiskon)
+    if (nominal === null) {
+      setErrorDiskon(
+        modeDiskon === 'persen'
+          ? 'Persen harus 0-100'
+          : 'Diskon harus angka yang valid dan tidak boleh negatif',
+      )
+      return
+    }
+    setSimpanDiskon(true)
+    try {
+      const { data } = await transactionsApi.setHarga(t.id, t.harga, undefined, nominal)
+      const bersih = Math.max((t.harga || 0) - nominal, 0)
+      toast.success(
+        'Diskon disimpan',
+        `Harga bersih ${formatRupiah(bersih)} — komisi pengerja dihitung ulang jadi ${formatRupiah(data.tech_commission || 0)}.`,
+      )
+      tabel.muatUlang()
+      tutupDiskon()
+    } catch (err) {
+      toast.error('Gagal menyimpan diskon', err.friendlyMessage || err.message)
+    } finally {
+      setSimpanDiskon(false)
     }
   }
 
@@ -379,17 +471,122 @@ export default function AdminTransaksi() {
                   <span className={cfg.className}>{cfg.label}</span>
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <p className="font-semibold text-slate-900">{formatRupiah(t.harga)}</p>
-                  {adaRentang(t.shoe?.harga_min, t.shoe?.harga_max) &&
-                    t.harga <= (t.shoe?.harga_min || 0) && (
-                      <p className="text-[10px] text-amber-600">harga awal, belum final</p>
-                    )}
+                  {diskonRow === t.id ? (
+                    /* ---------- Editor diskon inline (opsi khusus admin) ---------- */
+                    <div className="text-left">
+                      <div className="flex items-center gap-1 mb-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setModeDiskon('rp')}
+                          className={cn(
+                            'px-2 py-0.5 rounded-lg text-[11px] font-medium border transition-colors',
+                            modeDiskon === 'rp'
+                              ? 'border-primary-600 bg-primary-50 text-primary-700'
+                              : 'border-slate-200 text-slate-500 hover:bg-slate-50',
+                          )}
+                        >
+                          Rp
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setModeDiskon('persen')}
+                          className={cn(
+                            'px-2 py-0.5 rounded-lg text-[11px] font-medium border transition-colors',
+                            modeDiskon === 'persen'
+                              ? 'border-primary-600 bg-primary-50 text-primary-700'
+                              : 'border-slate-200 text-slate-500 hover:bg-slate-50',
+                          )}
+                        >
+                          %
+                        </button>
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        step={modeDiskon === 'persen' ? '1' : '1000'}
+                        value={nilaiDiskon}
+                        onChange={(e) => {
+                          setNilaiDiskon(e.target.value)
+                          setErrorDiskon('')
+                        }}
+                        disabled={simpanDiskon}
+                        className="w-32 text-xs border border-slate-200 rounded-lg px-2 py-1.5 outline-none focus:border-primary-400"
+                        placeholder={modeDiskon === 'persen' ? 'Contoh: 10' : 'Contoh: 10000'}
+                        aria-label={`Nilai diskon untuk ${t.kode || 'transaksi'} (${modeDiskon === 'persen' ? 'persen' : 'rupiah'})`}
+                      />
+                      {hitungDiskon(t, modeDiskon, nilaiDiskon) !== null && (
+                        <p className="text-[11px] text-slate-500 mt-1">
+                          Diskon{' '}
+                          <span className="font-semibold text-slate-700">
+                            {formatRupiah(hitungDiskon(t, modeDiskon, nilaiDiskon))}
+                          </span>{' '}
+                          → bersih{' '}
+                          <span className="font-semibold text-primary-700">
+                            {formatRupiah(
+                              Math.max(
+                                (t.harga || 0) - hitungDiskon(t, modeDiskon, nilaiDiskon),
+                                0,
+                              ),
+                            )}
+                          </span>
+                        </p>
+                      )}
+                      {errorDiskon && (
+                        <p className="text-[11px] text-rose-600 mt-1">{errorDiskon}</p>
+                      )}
+                      <div className="flex items-center gap-1 mt-1.5">
+                        <button
+                          onClick={() => simpanDiskonAdmin(t)}
+                          disabled={simpanDiskon}
+                          className="px-2 py-1 rounded-lg bg-primary-600 text-white text-xs font-medium hover:bg-primary-700 disabled:opacity-50"
+                        >
+                          {simpanDiskon ? 'Menyimpan...' : 'Simpan'}
+                        </button>
+                        <button
+                          onClick={tutupDiskon}
+                          disabled={simpanDiskon}
+                          className="px-2 py-1 rounded-lg text-xs text-slate-500 hover:bg-slate-100"
+                        >
+                          Batal
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* ---------- Harga biasa + tanda diskon aktif ---------- */
+                    <>
+                      <p className="font-semibold text-slate-900">{formatRupiah(hargaBersih(t))}</p>
+                      {t.diskon > 0 && (
+                        <p className="text-[10px] text-emerald-600">
+                          diskon {formatRupiah(t.diskon)} dari {formatRupiah(t.harga)}
+                        </p>
+                      )}
+                      {adaRentang(t.shoe?.harga_min, t.shoe?.harga_max) &&
+                        t.harga <= (t.shoe?.harga_min || 0) && (
+                          <p className="text-[10px] text-amber-600">harga awal, belum final</p>
+                        )}
+                    </>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-right text-slate-600">
                   {formatRupiah(t.tech_commission)}
                 </td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex items-center justify-end gap-1">
+                    {diskonRow !== t.id && t.status !== 'Siap diambil' && (
+                      <button
+                        onClick={() => bukaDiskon(t)}
+                        className={cn(
+                          'p-2 rounded-lg',
+                          t.diskon > 0
+                            ? 'text-emerald-600 hover:bg-emerald-50'
+                            : 'text-slate-400 hover:bg-amber-50 hover:text-amber-600',
+                        )}
+                        title={t.diskon > 0 ? `Atur diskon (aktif: ${formatRupiah(t.diskon)})` : 'Atur diskon'}
+                        aria-label={`Atur diskon ${t.kode || ''}`}
+                      >
+                        <BadgePercent className="h-4 w-4" />
+                      </button>
+                    )}
                     {bisaKirimInvoice(t) && (
                       <a
                         href={tautanWa(t.customer.phone, pesanWa(t))}
@@ -565,14 +762,16 @@ function Foto({ label, url, wajib }) {
     <div>
       <p className="label">{label}</p>
       {url ? (
-        <a href={url} target="_blank" rel="noreferrer" className="block">
+        // Preview pakai lightbox di halaman ini -- dulu <a target="_blank">
+        // buka tab baru setiap admin ingin memeriksa foto dokumentasi.
+        <LihatFoto src={url} alt={label}>
           <img
             src={url}
             alt={label}
             className="w-full h-40 object-cover rounded-xl border border-slate-200"
             loading="lazy"
           />
-        </a>
+        </LihatFoto>
       ) : (
         <div
           className={cn(
@@ -610,6 +809,8 @@ duduk di depan aturan yang sama.
 function FinalisasiHarga({ transaksi, onTersimpan }) {
   const [terbuka, setTerbuka] = useState(false)
   const [harga, setHarga] = useState(String(transaksi.harga ?? ''))
+  // '' = tanpa diskon. Dikirim sebagai angka (0 menghapus diskon yang ada).
+  const [diskon, setDiskon] = useState(transaksi.diskon ? String(transaksi.diskon) : '')
   const [alasan, setAlasan] = useState('')
   const [simpan, setSimpan] = useState(false)
   const [error, setError] = useState('')
@@ -618,7 +819,7 @@ function FinalisasiHarga({ transaksi, onTersimpan }) {
   const terkunci = t.status === 'Siap diambil'
   const sudahFinal = !adaRentang(t.shoe?.harga_min, t.shoe?.harga_max)
 
-  if (terkunci || sudahFinal) return null
+  if (terkunci) return null
 
   const kirim = async () => {
     const angka = Number(harga)
@@ -626,12 +827,21 @@ function FinalisasiHarga({ transaksi, onTersimpan }) {
       setError('Harga harus berupa angka dan tidak boleh negatif')
       return
     }
+    const potongan = diskon.trim() === '' ? 0 : Number(diskon)
+    if (!Number.isFinite(potongan) || potongan < 0) {
+      setError('Diskon harus berupa angka dan tidak boleh negatif')
+      return
+    }
+    if (potongan > angka) {
+      setError('Diskon tidak boleh lebih besar dari harga akhir')
+      return
+    }
     setError('')
     setSimpan(true)
     try {
-      const { data } = await transactionsApi.setHarga(t.id, angka, alasan.trim() || undefined)
+      const { data } = await transactionsApi.setHarga(t.id, angka, alasan.trim() || undefined, potongan)
       toast.success(
-        'Harga final disimpan',
+        sudahFinal ? 'Diskon disimpan' : 'Harga final disimpan',
         `Komisi pengerja dihitung ulang jadi ${formatRupiah(data.tech_commission || 0)}.`,
       )
       setTerbuka(false)
@@ -646,20 +856,36 @@ function FinalisasiHarga({ transaksi, onTersimpan }) {
 
   const bawah = t.shoe?.harga_min ?? 0
   const atas = t.shoe?.harga_max ?? 0
+  const potonganNumpad = diskon.trim() === '' ? 0 : Number(diskon) || 0
+  const bersih = Math.max((Number(harga) || 0) - potonganNumpad, 0)
 
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-amber-900">Harga final belum ditetapkan</p>
-          <p className="text-xs text-amber-800 mt-0.5">
-            Layanan ini punya rentang {formatRupiah(bawah)} - {formatRupiah(atas)}. Yang tercatat
-            sekarang {formatRupiah(t.harga)} (harga terendah).
-          </p>
+          {sudahFinal ? (
+            <>
+              <p className="text-sm font-semibold text-amber-900">Diskon transaksi</p>
+              <p className="text-xs text-amber-800 mt-0.5">
+                Tercatat sekarang {formatRupiah(t.harga)}
+                {t.diskon > 0
+                  ? `, diskon ${formatRupiah(t.diskon)} — bersih ${formatRupiah(hargaBersih(t))}.`
+                  : ', belum ada diskon.'}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-semibold text-amber-900">Harga final belum ditetapkan</p>
+              <p className="text-xs text-amber-800 mt-0.5">
+                Layanan ini punya rentang {formatRupiah(bawah)} - {formatRupiah(atas)}. Yang tercatat
+                sekarang {formatRupiah(t.harga)} (harga terendah).
+              </p>
+            </>
+          )}
         </div>
         {!terbuka && (
           <button onClick={() => setTerbuka(true)} className="btn-primary text-sm px-3 py-2 shrink-0">
-            Tetapkan Harga
+            {sudahFinal ? 'Atur Diskon' : 'Tetapkan Harga'}
           </button>
         )}
       </div>
@@ -667,17 +893,42 @@ function FinalisasiHarga({ transaksi, onTersimpan }) {
       {terbuka && (
         <div className="mt-4 space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Harga final" required error={error}>
+            {!sudahFinal && (
+              <Field label="Harga final" required error={error}>
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={harga}
+                  onChange={(e) => setHarga(e.target.value)}
+                  className={cn('input', error && 'input-error')}
+                  placeholder={String(atas)}
+                />
+              </Field>
+            )}
+            {sudahFinal && (
+              <Field label="Harga tercatat">
+                <input
+                  type="number"
+                  value={harga}
+                  onChange={(e) => setHarga(e.target.value)}
+                  className="input"
+                />
+              </Field>
+            )}
+            <Field label="Diskon (Rp)" hint="Potongan promo; komisi dihitung dari harga bersih">
               <input
                 type="number"
                 min="0"
                 step="1000"
-                value={harga}
-                onChange={(e) => setHarga(e.target.value)}
-                className={cn('input', error && 'input-error')}
-                placeholder={String(atas)}
+                value={diskon}
+                onChange={(e) => setDiskon(e.target.value)}
+                className="input"
+                placeholder="0"
               />
             </Field>
+          </div>
+          {!sudahFinal && (
             <Field label="Alasan (opsional)" hint="Tercatat di catatan teknisi">
               <input
                 type="text"
@@ -687,12 +938,19 @@ function FinalisasiHarga({ transaksi, onTersimpan }) {
                 placeholder="Contoh: area repaint 20 cm"
               />
             </Field>
-          </div>
+          )}
           <p className="text-xs text-amber-800">
-            Di luar rentang? Boleh, tapi pastikan alasannya jelas.{' '}
-            {Number(harga) >= bawah && Number(harga) <= atas
-              ? 'Harga ini masih di dalam rentang daftar.'
-              : 'Harga ini di luar rentang daftar.'}
+            {!sudahFinal && (
+              <>
+                Di luar rentang? Boleh, tapi pastikan alasannya jelas.{' '}
+                {Number(harga) >= bawah && Number(harga) <= atas
+                  ? 'Harga ini masih di dalam rentang daftar.'
+                  : 'Harga ini di luar rentang daftar.'}{' '}
+              </>
+            )}
+            {potonganNumpad > 0
+              ? `Total yang dibayar pelanggan: ${formatRupiah(bersih)} (diskon ${formatRupiah(potonganNumpad)}).`
+              : `Total yang dibayar pelanggan: ${formatRupiah(bersih)}.`}
           </p>
           <div className="flex gap-2">
             <button onClick={kirim} disabled={simpan} className="btn-primary text-sm px-3 py-2">
@@ -957,6 +1215,8 @@ function DetailTransaksi({ transaksi, teknisiList, adminId, onClose, onTersimpan
             <div className="divide-y divide-slate-100">
               <Baris label="Layanan" nilai={t.shoe?.merk} />
               <Baris label="Varian" nilai={t.shoe?.model} />
+              <Baris label="Jenis barang" nilai={t.jenis_sepatu} />
+              <Baris label="Nama barang" nilai={t.nama_sepatu} />
               <Baris label="Kelompok" nilai={t.shoe?.kelompok} />
               <Baris label="Treatment" nilai={t.shoe?.jenis_treatment} />
               <Baris label="Teknisi" nilai={t.tech?.full_name} />
@@ -967,14 +1227,21 @@ function DetailTransaksi({ transaksi, teknisiList, adminId, onClose, onTersimpan
         <div className="space-y-1">
           <p className="section-title mb-2">Nilai Transaksi</p>
           <div className="divide-y divide-slate-100 rounded-xl border border-slate-100 px-4">
-            <Baris label="Harga jual" nilai={formatRupiah(t.harga)} />
+            <Baris label="Harga" nilai={formatRupiah(t.harga)} />
+            {t.diskon > 0 && (
+              <Baris label="Diskon" nilai={`- ${formatRupiah(t.diskon)}`} />
+            )}
+            <Baris
+              label={t.diskon > 0 ? 'Harga bersih (setelah diskon)' : 'Harga jual'}
+              nilai={formatRupiah(hargaBersih(t))}
+            />
             <Baris
               label="Komisi pengerja (teknisi 40%, admin 0)"
               nilai={formatRupiah(t.tech_commission)}
             />
             <Baris
               label="Sisa untuk outlet"
-              nilai={formatRupiah((t.harga || 0) - (t.tech_commission || 0))}
+              nilai={formatRupiah(hargaBersih(t) - (t.tech_commission || 0))}
             />
           </div>
           <div className="mt-3">

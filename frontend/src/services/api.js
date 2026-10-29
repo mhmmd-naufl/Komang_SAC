@@ -93,9 +93,12 @@ export const transactionsApi = {
   // Update field lain (ganti teknisi, layanan, catatan)
   update: (id, data) => api.put(`/api/transaksi/${id}`, data),
 
-  // Finalisasi harga (admin)
-  setHarga: (id, harga, alasan) =>
-    api.put(`/api/transaksi/${id}/harga`, { harga, alasan }),
+  // Finalisasi harga (admin). `diskon` opsional: potongan harga admin.
+  setHarga: (id, harga, alasan, diskon) =>
+    api.put(
+      `/api/transaksi/${id}/harga`,
+      { harga, alasan, ...(diskon !== undefined ? { diskon: Number(diskon) } : {}) },
+    ),
 
   // Upload foto. Header multipart wajib: default instance adalah JSON, dan
   // axios 1.x akan mengubah FormData jadi JSON kalau header itu terpasang.

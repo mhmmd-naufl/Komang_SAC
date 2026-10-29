@@ -395,6 +395,8 @@ export default function AdminDashboard() {
           { judul: "Teknisi", nilai: (t) => t.tech?.full_name || "" },
           { judul: "Status", kunci: "status" },
           { judul: "Harga", nilai: (t) => t.harga ?? "" },
+          { judul: "Diskon", nilai: (t) => t.diskon ?? 0 },
+          { judul: "Harga Bersih", nilai: Math.max((t.harga || 0) - (t.diskon || 0), 0) },
           { judul: "Komisi Teknisi", nilai: (t) => t.tech_commission ?? "" },
         ],
         baris,
@@ -525,8 +527,10 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* Kartu angka */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+      {/* Kartu angka. grid-cols-2 dulu: di HP 360px kartu jadi terlalu
+          sempit buat sub-text panjang ("omzet − komisi − pengeluaran").
+          Sekarang 1 kolom di HP, 2 kolom tab, lupa balik ke 3/5 di desktop. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
         {cards.map((c) => (
           <div key={c.label} className="card p-5">
             <div
@@ -635,7 +639,16 @@ export default function AdminDashboard() {
                       </span>
                     </td>
                     <td className="px-5 py-3 font-medium">
-                      {formatRupiah(t.harga)}
+                      {/* Harga bersih (setelah diskon) -- angka yang
+                          sebenarnya ditagih ke pelanggan. Diskonnya ikut
+                          ditulis supaya tidak beda angka dengan Admin
+                          Transaksi dan invoice WhatsApp. */}
+                      {formatRupiah(Math.max((t.harga || 0) - (t.diskon || 0), 0))}
+                      {t.diskon > 0 && (
+                        <p className="text-[10px] font-normal text-emerald-600">
+                          diskon {formatRupiah(t.diskon)}
+                        </p>
+                      )}
                     </td>
                     <td className="px-5 py-3 text-slate-500 text-xs whitespace-nowrap">
                       {formatDate(t.created_at)}

@@ -64,9 +64,9 @@ export default function Modal({ open, onClose, title, description, children, foo
           lebar,
         )}
       >
-        <div className="flex items-start gap-4 border-b border-slate-100 p-5">
+        <div className="flex items-start gap-4 border-b border-slate-100 p-4 sm:p-5">
           <div className="min-w-0 flex-1">
-            <h3 className="text-lg font-bold text-slate-900">{title}</h3>
+            <h3 className="text-base sm:text-lg font-bold text-slate-900">{title}</h3>
             {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
           </div>
           <button
@@ -78,9 +78,9 @@ export default function Modal({ open, onClose, title, description, children, foo
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5">{children}</div>
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5">{children}</div>
 
-        {footer && <div className="border-t border-slate-100 p-5">{footer}</div>}
+        {footer && <div className="border-t border-slate-100 p-4 sm:p-5">{footer}</div>}
       </div>
     </div>
   )

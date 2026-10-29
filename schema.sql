@@ -93,6 +93,21 @@ CREATE TABLE IF NOT EXISTS transactions (
     catatan_konsumen TEXT,                                 -- diisi konsumen saat titip
     defect_notes     TEXT,                                 -- cacat bawaan, diisi teknisi
 
+    -- Jenis sepatu yang dititip (Sneakers, Canvas, Leather, ...). Diisi WAJIB
+    -- konsumen lewat dropdown saat order; validasi keharusan di kode create
+    -- (main.py), bukan NOT NULL, karena baris lama tidak punya nilai ini.
+    jenis_sepatu     TEXT,
+
+    -- Nama/merk sepatu yang dititip (cth. "Nike Air Force 1 putih").
+    -- Diisi WAJIB konsumen di form booking, selangkah sebelum tombol booking.
+    nama_sepatu      TEXT,
+
+    -- Potongan harga yang ditetapkan admin lewat finalisasi harga.
+    -- NULL = belum pernah diatur, diperlakukan 0. Komisi teknisi dihitung
+    -- dari harga bersih (harga - diskon), supaya promo tidak ikut memotong
+    -- komisi pengerja.
+    diskon           INTEGER CHECK ((diskon IS NULL) OR (diskon >= 0 AND diskon <= harga)),
+
     -- hanya 2 foto: sebelum & sesudah (TIDAK ada foto proses)
     photo_before     TEXT,
     photo_after      TEXT,

@@ -15,6 +15,16 @@ import Modal, {
   SearchInput,
 } from "../AdminUi";
 
+// Saran kelompok katalog, SAMA dengan KELOMPOK_KATALOG di main.py. Nilainya
+// dipilih admin di dropdown Kelompok -- dulu field ini bahkan tidak ada di
+// form dan nilai terkirim selalu hardcode "Cuci Sepatu", yang memindahkan
+// layanan lain (mis. Shoes Reglue) ke tab kelompok yang salah.
+const KELOMPOK_KATALOG = [
+  "Cuci Sepatu",
+  "Bag, Hat & Helmet",
+  "Repaint & Reglue",
+];
+
 // Saran treatment (gabungan semua kelompok). Input bebas ketik karena backend
 // pakai pola terbuka. Saran ini supaya admin tidak perlu ingat ejaan tiap kali.
 const SARAN_TREATMENT = [
@@ -34,6 +44,8 @@ const SARAN_TREATMENT = [
 
 const FORM_AWAL = {
   // 'merk' = Treatment (Nama Layanan), 'model' = Varian
+  id: null,
+  kelompok: "Cuci Sepatu",
   merk: "",
   model: "",
   harga_cuci: "",
@@ -66,13 +78,19 @@ function kePayload(form, { hanyaStatus = false } = {}) {
     Boolean(form.rentang) && Number.isFinite(hargaAtas) && hargaAtas > harga;
 
   return {
-    // kelompok tidak dari form, default ke "Cuci Sepatu" (backend akan handle)
-    kelompok: "Cuci Sepatu",
+    // Kelompok semua dari form yang benar-benar dipilih admin. DULU di-hardcode
+    // "Cuci Sepatu" -- setiap edit via panel memindahkan layanan apa pun ke
+    // kelompok Cuci Sepatu, dan itulah dulu yang membuat baris Shoes Reglue
+    // nyasar ke tab Cuci Sepatu di katalog.
+    kelompok: form.kelompok?.trim() || "Cuci Sepatu",
     merk: form.merk.trim(),
     model: isi(form.model?.trim()) ?? null,
     harga_cuci: Number.isFinite(harga) ? harga : 0,
     harga_min: pakaiRentang ? harga : null,
     harga_max: pakaiRentang ? hargaAtas : null,
+    // Nilai dari form -- pasangan (kelompok, jenis_treatment) ini yang
+    // mengelompokkan kartu di katalog. DULU field-nya tidak ada di form,
+    // jadi selalu dikirim null dan kartu katalog terlempar acak.
     jenis_treatment: isi(form.jenis_treatment?.trim()) ?? null,
     keterangan_treatment: isi(form.keterangan_treatment?.trim()) ?? null,
     // Kosong = pakai default di sisi konsumen (bukan 0 -- 0 bukan estimasi sah).
@@ -89,7 +107,11 @@ function formDariBaris(baris) {
   const rentang = atas != null && Number(atas) > Number(bawah);
 
   return {
-    // kelompok tidak di-edit di form, default
+    // id WAJIB ikut: tombol Simpan bercabang `form.id ? update : create`.
+    // DULU id tidak dibawa, sehingga semua edit via tombol Pencil dieksekusi
+    // jalur create -- layanannya digandakan, bukan diperbarui.
+    id: baris.id,
+    kelompok: baris.kelompok ?? "Cuci Sepatu",
     merk: baris.merk ?? "",
     model: baris.model ?? "",
     harga_cuci: bawah != null ? String(bawah) : "",
@@ -423,6 +445,22 @@ export default function AdminShoes() {
         {form && (
           <div className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                label="Kelompok Katalog"
+                hint="Menentukan tab mana kartunya tampil di katalog publik."
+              >
+                <select
+                  value={form.kelompok}
+                  onChange={(e) => ubahField("kelompok", e.target.value)}
+                  className="input"
+                >
+                  {KELOMPOK_KATALOG.map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <Field label="Treatment" required error={errors.merk}>
                 <input
                   type="text"
@@ -431,6 +469,27 @@ export default function AdminShoes() {
                   className={cn("input", errors.merk && "input-error")}
                   placeholder="Fast Cleaning, Deep Cleaning, Shoes Repaint..."
                 />
+              </Field>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                label="Jenis Treatment (pengelompok kartu)"
+                hint="Baris dengan jenis yang sama jadi varian di satu kartu. Isi sama dengan Treatment untuk satu kartu sendiri."
+              >
+                <input
+                  type="text"
+                  value={form.jenis_treatment}
+                  onChange={(e) => ubahField("jenis_treatment", e.target.value)}
+                  className="input"
+                  list="saran-treatment"
+                  placeholder="Deep Cleaning, Shoes Reglue, ..."
+                />
+                <datalist id="saran-treatment">
+                  {SARAN_TREATMENT.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
               </Field>
               <Field
                 label="Varian"

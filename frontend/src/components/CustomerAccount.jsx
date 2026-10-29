@@ -15,6 +15,7 @@ import { transactionsApi, shoesApi, configApi } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { getStatusConfig, formatRupiah, formatDateTime, cn } from '../utils/helpers'
 import { SearchInput } from './AdminUi'
+import LihatFoto from './LihatFoto'
 
 /**
  * Halaman akun Konsumen.
@@ -198,7 +199,7 @@ export default function CustomerAccount() {
             {(aktif.photo_before || aktif.photo_after) && (
               <div className="mt-5 grid grid-cols-2 gap-3">
                 {aktif.photo_before && (
-                  <a href={aktif.photo_before} target="_blank" rel="noopener noreferrer" className="group">
+                  <LihatFoto src={aktif.photo_before} alt="Kondisi sebelum dicuci" className="group">
                     <img
                       src={aktif.photo_before}
                       alt="Kondisi sebelum dicuci"
@@ -206,10 +207,10 @@ export default function CustomerAccount() {
                       className="w-full aspect-square object-cover rounded-xl border border-slate-200 group-hover:opacity-90 transition-opacity"
                     />
                     <p className="text-[11px] text-slate-500 mt-1">Sebelum dicuci</p>
-                  </a>
+                  </LihatFoto>
                 )}
                 {aktif.photo_after && (
-                  <a href={aktif.photo_after} target="_blank" rel="noopener noreferrer" className="group">
+                  <LihatFoto src={aktif.photo_after} alt="Kondisi sesudah dicuci" className="group">
                     <img
                       src={aktif.photo_after}
                       alt="Kondisi sesudah dicuci"
@@ -217,7 +218,7 @@ export default function CustomerAccount() {
                       className="w-full aspect-square object-cover rounded-xl border border-slate-200 group-hover:opacity-90 transition-opacity"
                     />
                     <p className="text-[11px] text-slate-500 mt-1">Sesudah dicuci</p>
-                  </a>
+                  </LihatFoto>
                 )}
               </div>
             )}
@@ -310,7 +311,11 @@ export default function CustomerAccount() {
                       </div>
                       <p className="text-sm text-slate-700 mt-1.5">{t.nama}</p>
                       <p className="text-[11px] text-slate-400 mt-1">
-                        {formatDateTime(t.created_at)} · {formatRupiah(t.harga)}
+                        {formatDateTime(t.created_at)} ·{' '}
+                        {formatRupiah(Math.max((t.harga || 0) - (t.diskon || 0), 0))}
+                        {t.diskon > 0 && (
+                          <span className="text-emerald-600"> (diskon {formatRupiah(t.diskon)})</span>
+                        )}
                       </p>
                     </div>
 
@@ -334,15 +339,12 @@ export default function CustomerAccount() {
 
                   {/* Foto -- sudah dikirimnya foto setelah ditandai selesai */}
                   {t.photo_after && (
-                    <a
-                      href={t.photo_after}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 inline-flex items-center gap-1.5 text-xs text-primary-600 hover:underline"
-                    >
-                      <Camera className="h-3.5 w-3.5" />
-                      Lihat hasil setelah ({t.nama})
-                    </a>
+                    <LihatFoto src={t.photo_after} alt="Kondisi sesudah dicuci">
+                      <span className="mt-3 inline-flex items-center gap-1.5 text-xs text-primary-600 hover:underline">
+                        <Camera className="h-3.5 w-3.5" />
+                        Lihat hasil setelah ({t.nama})
+                      </span>
+                    </LihatFoto>
                   )}
                 </div>
               )

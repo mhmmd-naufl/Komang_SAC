@@ -172,7 +172,7 @@ export default function LoginModal() {
         value={formData.phone}
         onChange={handleChange}
         className={cn('input', errors.phone && 'input-error')}
-        placeholder="08123456789"
+        placeholder="628123456789"
         autoComplete="tel"
       />
       {errors.phone && <p className="text-xs text-rose-600 mt-1">{errors.phone}</p>}

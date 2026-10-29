@@ -378,6 +378,14 @@ class TransactionBase(BaseModel):
     tech_id: Optional[str] = None
     drop_point_id: Optional[str] = None
     harga: Optional[int] = None
+    # JENIS sepatu yang titip (Sneakers, Canvas, Leather, ...). Wajib dipilih
+    # konsumen sebelum order -- divalidasi manual di create_transaksi supaya
+    # pesannya bisa berbahasa manusia (Field(...) untuk required menghasilkan
+    # 422 generik yang sulit dibaca di UI).
+    jenis_sepatu: Optional[str] = None
+    # NAMA sepatu yang titip (merk/tipe, cth. "Nike Air Force 1"). Wajib
+    # sebelahan dengan jenis_sepatu.
+    nama_sepatu: Optional[str] = None
     catatan_konsumen: Optional[str] = None
     # Metode bayar pilihan konsumen saat booking (tunai/transfer/qris).
     # Divalidasi terhadap ACCEPTED_PAYMENTS saat create.
@@ -444,6 +452,10 @@ class TransactionResponse(TransactionBase):
     # preferensi tampilan -- teknisi tidak bisa membacanya lewat DevTools.
     harga: Optional[int] = None
     tech_commission: Optional[int] = None
+    # Potongan harga yang ditetapkan admin lewat endpoint finalisasi. NULL =
+    # belum pernah diatur (diperlakukan 0). Ikut disembunyikan dari teknisi
+    # bersama harga karena keduanya sama-sama angka buku kas.
+    diskon: Optional[int] = None
     # Hanya terisi untuk admin dan drop point (lihat _sertakan_kontak).
     customer: Optional[CustomerContact] = None
     # Nama sepatu dan teknisi, hasil embed PostgREST. Tanpa ini tabel admin
@@ -752,7 +764,7 @@ def require_role(*roles: str):
 # Field yang TIDAK boleh keluar ke teknisi. Aturan bisnis: teknisi fokus
 # pada pekerjaan, tidak perlu melihat harga jual maupun komisi. disembunyikan
 # di backend (bukan cuma di frontend) supaya tidak bisa dibaca lewat DevTools.
-_FIELD_TEKAN_HIDDEN = ("harga", "tech_commission")
+_FIELD_TEKAN_HIDDEN = ("harga", "tech_commission", "diskon")
 
 
 def _sembunyikan_biaya(baris: list[dict], user: dict) -> list[dict]:
@@ -1876,6 +1888,32 @@ def create_transaksi(request: Request, transaksi: TransactionCreate, user: dict 
     master = shoe.data[0]
     data["harga"] = master.get("harga_min") or master["harga_cuci"]
 
+    # Jenis + nama barang wajib: tanpa keduanya, teknisi saat menerima barang
+    # cuma menemukan "Deep Cleaning" tanpa tahu pasangan mana dari rak yang
+    # jadi miliknya, dan datanya tidak muncul di laporan per jenis. Nama kolom
+    # tetap jenis_sepatu/nama_sepatu (sejarah), tapi isinya barang apa pun:
+    # sepatu, tas, helm, topi -- label di frontend yang menyesuaikan.
+    # Wajib untuk semua role, termasuk admin yang create behalf konsumen.
+    jenis_sepatu = (data.get("jenis_sepatu") or "").strip()
+    if not jenis_sepatu:
+        raise HTTPException(
+            400,
+            "Jenis barang wajib dipilih sebelum order (cth. Sneakers).",
+        )
+    if len(jenis_sepatu) > 50:
+        raise HTTPException(400, "Jenis barang maksimal 50 karakter.")
+    data["jenis_sepatu"] = jenis_sepatu
+
+    nama_sepatu = (data.get("nama_sepatu") or "").strip()
+    if not nama_sepatu:
+        raise HTTPException(
+            400,
+            "Nama barang wajib diisi sebelum order (cth. 'Nike Air Force 1').",
+        )
+    if len(nama_sepatu) > 100:
+        raise HTTPException(400, "Nama barang maksimal 100 karakter.")
+    data["nama_sepatu"] = nama_sepatu
+
     # Metode bayar: normalisasi alias lalu tolak yang tidak diterima outlet.
     # Dulu pilihan ini hanya hiasan UI -- tidak dikirim ke backend sama sekali,
     # jadi admin tidak pernah tahu konsumen mau bayar lewat apa.
@@ -2299,8 +2337,14 @@ class TransactionPriceUpdate(BaseModel):
     Dipakai admin setelah memeriksa kondisi fisik shoes. Untuk layanan
     ber-harga-rentang (mis. Repaint 80.000-150.000), harga saat booking hanya
     harga terendah, jadi admin perlu menetapkan harga final di outlet.
+
+    `diskon` (opsional) = potongan harga yang admin kasih ke pelanggan (mis.
+    promo, member). Komisi teknisi dihitung dari harga BERSIH (harga - diskon),
+    bukan harga kotor, supaya potongan promo tidak membuat potongan teknisi
+    ikut besar. Diskon tidak boleh melampaui harga.
     """
     harga: int = Field(..., ge=0)
+    diskon: Optional[int] = Field(None, ge=0)
     alasan: Optional[str] = None  # contoh: "Sol upper robek, area 5 cm"
 
 
@@ -2357,11 +2401,24 @@ def update_transaksi_harga(
                 f"{update.harga} (daftar {batas_min}-{batas_max})"
             )
 
+    # Diskon: NULL input = biarkan nilai lama / NULL (belum diatur). Kalau
+    # diisi, tidak boleh membuat harga bersih jadi negatif, dan komisi
+    # dihitung ulang dari harga bersih -- bukan harga kotor.
+    bersih = update.harga
     data = {
         "harga": update.harga,
-        "tech_commission": komisi_untuk(update.harga, current.get("tech_id")),
         "updated_at": get_now_iso(),
     }
+    if update.diskon is not None:
+        if update.diskon > update.harga:
+            raise HTTPException(
+                400,
+                f"Diskon Rp{update.diskon:,} tidak boleh lebih besar dari harga Rp{update.harga:,}".replace(",", "."),
+            )
+        data["diskon"] = update.diskon
+        bersih = update.harga - update.diskon
+
+    data["tech_commission"] = komisi_untuk(bersih, current.get("tech_id"))
     # Catatan alasan disimpan di defect_notes, bukan kolom baru, supaya
     # tidak perlu migrasi. Prefiks supaya jelas itu keputusan admin, bukan
     # catatan cacat dari teknisi.
@@ -2482,6 +2539,11 @@ def update_transaksi(
     if "tech_id" in data or "shoe_id" in data:
         harga_dasar = data.get("harga") or (existing.data[0].get("harga") or 0)
         pengerja_kini = data.get("tech_id", existing.data[0].get("tech_id"))
+        # Diskon direset saat ganti layanan: promo dikaitkan layanan lama,
+        # dipertahankan di layanan baru akan membuat harga bersih salah.
+        if "shoe_id" in data:
+            data["diskon"] = None
+            harga_dasar -= existing.data[0].get("diskon") or 0
         data["tech_commission"] = komisi_untuk(harga_dasar, pengerja_kini)
 
     data["updated_at"] = get_now_iso()
